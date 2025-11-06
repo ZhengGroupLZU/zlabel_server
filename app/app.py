@@ -1,113 +1,230 @@
 import asyncio
-from io import BytesIO
 import json
-from pathlib import Path
-from typing import List, Annotated
-import subprocess
+import traceback
+from collections import OrderedDict
+from collections.abc import Callable
+from io import BytesIO
 
 import numpy as np
 import requests
-from fastapi import Depends, FastAPI, File, Form, UploadFile, Header, status, Response
+from fastapi import (
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
+from fastapi.responses import JSONResponse
 from PIL import Image
 from rich import print
 
-from data_struct import Annotation, Point, Rect, SamReturn, annotation_checker
-from sam_onnx import SamOnnxModel, EdgeSam
-from worker import AutoMode, ZSamWorker
-from app.db import get_tasks, insert_link_table
+import app.db as db
+from app.config import SETTINGS
+from app.openlist_api import OpenListAPIError, OpenListClient
+from app.sam_onnx import EdgeSam, SamOnnxModel
+from app.worker import AutoMode, ReturnType, ZSamWorker
+from app.ztypes import Annotation, Point, Rect, SamReturn, annotation_checker
 
-ALIST_HOST = "http://127.0.0.1:5244"
-VERSION = "1.0.0"
-# ENCODER_PATH = "assets/sam_vit_h_encoder_quantized.onnx"
-# DECODER_PATH = "assets/sam_vit_h_decoder_quantized.onnx"
-ENCODER_PATH = "assets/edge_sam_3x_encoder.onnx"
-DECODER_PATH = "assets/edge_sam_3x_decoder.onnx"
-
+oplist_client = OpenListClient(SETTINGS.oplist_host)
 app = FastAPI()
-# SAM_MODEL = SamOnnxModel(ENCODER_PATH, DECODER_PATH)
-SAM_MODEL = EdgeSam(ENCODER_PATH, DECODER_PATH)
-
-IMAGE_CACHE = {}
 
 
-USERS = [
-    "lyl",
-    "wzh",
-    "zhq",
-    "csy",
-    "open_labeling",
-]
+SAM_MODEL = (
+    SamOnnxModel(SETTINGS.encoder_path, SETTINGS.decoder_path)
+    if SETTINGS.model_name == "SAM"
+    else EdgeSam(SETTINGS.encoder_path, SETTINGS.decoder_path)
+)
+
+
+IMAGE_CACHE = OrderedDict()
+
+
+async def _cache_image(image_id: str, image: bytes):
+    if len(IMAGE_CACHE) >= SETTINGS.image_cache_size:
+        IMAGE_CACHE.popitem(last=False)
+    IMAGE_CACHE[image_id] = image
+
+
+def oplist_client_try_run(func: Callable[..., JSONResponse | Response]):
+    def wrapper(*args, **kwargs) -> JSONResponse | Response:
+        try:
+            return func(*args, **kwargs)
+        except OpenListAPIError as e:
+            print(traceback.format_exc())
+            return JSONResponse(
+                status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"message": str(e), "data": None},
+                media_type="application/json",
+            )
+        except requests.exceptions.HTTPError as e:
+            print(traceback.format_exc())
+            return JSONResponse(
+                status_code=e.response.status_code,
+                content={"message": str(e), "data": None},
+                media_type="application/json",
+            )
+        except Exception as e:
+            print(traceback.format_exc())
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"message": str(e), "data": None},
+                media_type="application/json",
+            )
+
+    return wrapper
 
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to SamServer!", "version": f"v{VERSION}"}
+    return {"message": "Welcome to SamServer!", "version": f"v{SETTINGS.version}"}
 
 
-@app.post("/api/v1/login", status_code=status.HTTP_200_OK, response_class=Response)
-async def login(username: str = Form(...), password: str = Form("123456")):
-    if username not in USERS:
-        payload = json.dumps({"username": "open_labeling", "password": "123456"})
-    else:
-        payload = json.dumps({"username": username, "password": password})
-    url = f"{ALIST_HOST}/api/auth/login"
-    headers = {
-        "User-Agent": f"SAMServer/v{VERSION}",
-        "Content-Type": "application/json",
-    }
-    try:
-        resp = requests.post(url, data=payload, headers=headers)
-        if resp.status_code != 200 or resp.json()["code"] != 200:
-            return Response(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                content=resp.content,
-                media_type="application/json",
-            )
-        return Response(
-            json.dumps({"token": resp.json()["data"]["token"]}),
+@app.api_route(
+    "/api/v1/login",
+    methods=["GET", "POST"],
+    response_class=JSONResponse,
+)
+async def login(username: str = Query(...), password: str = Query(...)):
+    @oplist_client_try_run
+    def login_func():
+        response = oplist_client.auth.login(username, password)
+        return JSONResponse(
+            {
+                "message": "success",
+                "data": {"username": username, "token": response.data.token},
+            },
+            status_code=status.HTTP_200_OK,
             media_type="application/json",
         )
-    except Exception as e:
-        return Response(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=str(e),
-            media_type="text/plain",
+
+    return login_func()
+
+
+@app.api_route(
+    "/api/v1/me",
+    methods=["GET", "POST"],
+    response_class=JSONResponse,
+)
+async def get_current_user(authorization: str = Header(None)):
+    @oplist_client_try_run
+    def get_current_user_func():
+        oplist_client.set_token(authorization)
+        resp = oplist_client.auth.get_current_user()
+        return JSONResponse(
+            {
+                "message": "success",
+                "data": resp.data.model_dump(),
+            },
+            media_type="application/json",
         )
 
+    return get_current_user_func()
 
-@app.get(
-    "/api/v1/get_image/{name}",
-    responses={
-        200: {"content": {"image/png": {}}},
-        500: {"content": {"application/json": {}}},
-    },
+
+@app.api_route(
+    "/api/v1/list_projects",
+    methods=["GET", "POST"],
+    response_class=JSONResponse,
+)
+async def list_projects(authorization: str = Header(None)):
+    @oplist_client_try_run
+    def list_projects_func():
+        oplist_client.set_token(authorization)
+        resp = oplist_client.fs.ls(SETTINGS.oplist_proj_dir)
+        return JSONResponse(
+            {
+                "message": "success",
+                "data": resp.data.model_dump(),
+            },
+            media_type="application/json",
+        )
+
+    return list_projects_func()
+
+
+@app.api_route(
+    "/api/v1/list_files",
+    methods=["GET", "POST"],
+    status_code=status.HTTP_200_OK,
+    response_class=JSONResponse,
+)
+async def list_files(
+    project: str,
+    authorization: str = Header(None),
+):
+    @oplist_client_try_run
+    def list_files_func():
+        oplist_client.set_token(authorization)
+        resp = oplist_client.fs.ls(f"{SETTINGS.oplist_proj_dir}/{project}")
+
+        return JSONResponse(
+            {
+                "message": "success",
+                "data": resp.data.model_dump(),
+            },
+            media_type="application/json",
+        )
+
+    return list_files_func()
+
+
+@app.api_route(
+    "/api/v1/get_file_info",
+    methods=["GET", "POST"],
+)
+async def get_file_info(
+    path: str,
+    authorization: str = Header(None),
+):
+    @oplist_client_try_run
+    def get_file_info_func():
+        oplist_client.set_token(authorization)
+        resp = oplist_client.fs.get(path)
+
+        return JSONResponse(
+            {
+                "message": "success",
+                "data": resp.model_dump(),
+            },
+            media_type="application/json",
+        )
+
+    return get_file_info_func()
+
+
+@app.api_route(
+    "/api/v1/get_image",
+    methods=["GET", "POST"],
     response_class=Response,
 )
-async def get_image(name: str, authorization: str = Header(None)):
-    url = f"{ALIST_HOST}/p/datasets/seeds_data/exported_pngs/{name}"
-    headers = {
-        "User-Agent": f"SAMServer/v{VERSION}",
-        "Authorization": authorization,
-    }
-    if name in IMAGE_CACHE:
-        return Response(content=IMAGE_CACHE[name], media_type="image/png")
+async def get_image(
+    name: str,
+    authorization: str = Header(None),
+):
+    path = f"{SETTINGS.oplist_proj_dir}/{SETTINGS.oplist_proj_name}/{name}"
+    if path in IMAGE_CACHE:
+        return Response(content=IMAGE_CACHE[path], media_type="image/png")
     try:
-        resp = requests.get(url, headers=headers, stream=True)
-        if resp.status_code != 200 or resp.headers["Content-Type"] != "image/png":
-            return Response(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                content=resp.content,
-                media_type="application/json",
-            )
+        oplist_client.set_token(authorization)
+        img_bytes = oplist_client.fs.get_file_bytes(path)
 
-        IMAGE_CACHE[name] = resp.content
-        await _set_model_image(resp.content)
+        await _cache_image(path, img_bytes)
+        await _set_model_image(img_bytes)
 
-        return Response(content=resp.content, media_type="image/png")
-    except Exception as e:
         return Response(
+            content=img_bytes,
+            status_code=status.HTTP_200_OK,
+            media_type="image/png",
+        )
+    except Exception as e:
+        print(traceback.format_exc())
+        return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=str(e),
+            content={"message": str(e), "data": None},
             media_type="application/json",
         )
 
@@ -119,70 +236,83 @@ async def save_zlabel(
     filename: str = Form(...),
     authorization: str = Header(None),
 ):
-    url = f"{ALIST_HOST}/api/fs/put"
-    headers = {
-        "User-Agent": f"SAMServer/v{VERSION}",
-        "Authorization": authorization,
-        "Content-Type": "text/plain",
-        "File-Path": "",
-    }
-
-    anno = json.loads(zlabel.decode("utf-8"))
-    insert_link_table(
-        anno["id"],
-        user_name=username,
-    )
-
-    msg = []
-    resp = None
-    headers[
-        "File-Path"
-    ] = f"/datasets/seeds_data/exported_pngs_label/{Path(filename).name}"
-    try:
-        resp = requests.put(url, data=zlabel, headers=headers)
-        if resp.status_code == 200:
-            if resp.json()["message"] == "success":
-                msg.append({"status": True, "msg": "success"})
+    @oplist_client_try_run
+    def save_zlabel_func():
+        oplist_client.set_token(authorization)
+        file_path = f"{SETTINGS.oplist_zlabel_save_dir}/{filename}"
+        resp = oplist_client.fs.stream_upload(file_path, BytesIO(zlabel), as_task=False)
+        if resp.code == 200 and resp.message == "success":
+            msg = {"message": "success", "data": None}
         else:
-            msg.append({"status": False, "msg": resp.text})
-    except Exception as e:
-        msg.append({"status": False, "msg": str(e)})
-    return Response(content=json.dumps(msg), media_type="application/json")
+            msg = {"message": resp.message, "data": None}
 
-
-@app.get("/api/v1/get_zlabel/{name}", response_class=Response)
-async def get_zlabel(name: str, authorization: str = Header(None)):
-    url = f"{ALIST_HOST}/d/datasets/seeds_data/exported_pngs_label/{name}"
-    headers = {
-        "User-Agent": f"SAMServer/v{VERSION}",
-        "Authorization": authorization,
-    }
-    try:
-        resp = requests.get(url, headers=headers)
-        if resp.status_code != 200 or resp.json().get("code", 200) != 200:
-            return Response(
-                status_code=status.HTTP_404_NOT_FOUND,
-                content=resp.content,
-                media_type="application/json",
-            )
-        return Response(content=resp.content, media_type="application/json")
-    except Exception as e:
-        return Response(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=str(e),
-            media_type="text/plain",
+        # save to local database
+        anno = json.loads(zlabel.decode("utf-8"))
+        db.insert_link_table(
+            anno["id"],
+            user_name=username,
         )
+
+        return JSONResponse(
+            content=msg,
+            status_code=status.HTTP_200_OK,
+            media_type="application/json",
+        )
+
+    return save_zlabel_func()
+
+
+@app.api_route(
+    "/api/v1/get_zlabel",
+    methods=["GET", "POST"],
+    response_class=JSONResponse,
+)
+async def get_zlabel(name: str, authorization: str = Header(None)):
+    @oplist_client_try_run
+    def get_zlabel_func():
+        oplist_client.set_token(authorization)
+
+        file_bytes = oplist_client.fs.get_file_bytes(f"{SETTINGS.oplist_zlabel_save_dir}/{name}")
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=json.loads(file_bytes.decode("utf-8")),
+        )
+
+    return get_zlabel_func()
+
+
+async def refresh_tasks(authorization: str):
+    allowed_image_ext = [".png", ".jpg", ".jpeg"]
+    oplist_client.set_token(authorization)
+    project_list = []
+
+    projects = oplist_client.fs.dirs(SETTINGS.oplist_proj_dir)
+    for project in projects.data:
+        img_files = oplist_client.fs.ls(f"{SETTINGS.oplist_proj_dir}/{project.name}")
+        img_files_filtered = []
+        for img_file in img_files.data.get_files():
+            if any(img_file.name.lower().endswith(ext) for ext in allowed_image_ext):
+                img_files_filtered.append(img_file.name)
+        project_list.append(
+            {
+                "name": project.name,
+                "files": img_files_filtered,
+            }
+        )
+        db.create_or_update_projects(project_list)
 
 
 @app.get("/api/v1/get_tasks")
-async def _get_tasks(num: int = 30, finished: int = 1):
+async def get_tasks(num: int = 30, finished: int = -1, authorization: str = Header(None)):
     """
     finished: -1: all, 0: unfinished, 1: finished
     """
-    tasks = get_tasks(num, finished)
+    await refresh_tasks(authorization)
+    tasks = db.get_tasks(num, finished)
     res = [
         {
             "id": task.id,
+            "project_id": task.project_id,
             "anno_id": task.anno_id,
             "filename": task.filename,
             "labels": [label.name for label in task.labels],
@@ -190,56 +320,32 @@ async def _get_tasks(num: int = 30, finished: int = 1):
         }
         for task in tasks
     ]
-    return res
+    return JSONResponse(
+        content={"message": "success", "data": res},
+        status_code=status.HTTP_200_OK,
+        media_type="application/json",
+    )
 
 
 @app.get("/api/v1/how-many-finished")
 async def how_many_finished():
-    dir0 = "/home/rainy/dev/datasets/labelspace/seeds_data"
-    cmds = [
-        ["find", f"{dir0}/exported_pngs", "-name", "*.png"],
-        ["find", f"{dir0}/exported_pngs_label", "-name", "*.zlabel"],
-        ["find", f"{dir0}/exported_pngs_label", "-name", "*.zlabel", "-size", "+1k"],
-    ]
-    wc = ["wc", "-l"]
-    nums = []
-    for cmd in cmds:
-        find = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-        n = subprocess.check_output(wc, stdin=find.stdout)
-        nums.append(n.decode("utf-8").replace("\n", ""))
-    return {"all": nums[0], "labeled": nums[1], "verified": nums[2]}
+    n = db.how_many_finished()
+    return JSONResponse(
+        content={"message": "success", "data": n},
+        status_code=status.HTTP_200_OK,
+        media_type="application/json",
+    )
 
 
-@app.post("/api/v1/setimage")
+@app.post("/api/v1/set_image")
 async def set_image(image: UploadFile = File(...)):
     content = await image.read()
     img = Image.open(BytesIO(content))
     SAM_MODEL.encode(np.asarray(img, dtype=np.uint8))
-    return {"status": True}
-
-
-@app.post("/api/v0/predict")
-async def predict(
-    image: UploadFile = File(...),
-    anno: Annotation = Depends(annotation_checker),
-    threshold: int = Form(100),
-    mode: int = Form(1),
-):
-    """
-    mode: 1 -> SAM, 2 -> CV, 1&2 -> SAM_AND_CV
-    """
-    # print(anno, image.file)
-    content = await image.read()
-    img = Image.open(BytesIO(content))
-    auto_mode = AutoMode(mode)
-    return _predict(
-        anno.id,
-        img,
-        anno.points,
-        anno.labels,
-        anno.rects,
-        threshold,
-        auto_mode,
+    return JSONResponse(
+        content={"message": "success", "data": None},
+        status_code=status.HTTP_200_OK,
+        media_type="application/json",
     )
 
 
@@ -250,35 +356,39 @@ async def predict_v1(
     mode: int = Form(1),
     image_name: str = Form(...),
     authorization: str = Header(None),
+    return_type: int = Form(1),  # RECT = 1 POLYGON = 2 RLE = 3
 ):
     resp = await get_image(image_name, authorization)
     if resp.status_code != 200:
-        return Response(
+        return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content=resp.body,
             media_type="application/json",
         )
-    try:
+
+    @oplist_client_try_run
+    def predict_func():
         img = Image.open(BytesIO(resp.body))
-        auto_mode = AutoMode(mode)
-        return _predict(
+        result = _predict(
             anno.id,
             img,
             anno.points,
             anno.labels,
             anno.rects,
             threshold,
-            auto_mode,
+            AutoMode(mode),
+            ReturnType(return_type),
         )
-    except Exception as e:
-        return Response(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=str(e),
+        return JSONResponse(
+            content={"message": "success", "data": result.model_dump()},
+            status_code=status.HTTP_200_OK,
             media_type="application/json",
         )
 
+    return predict_func()
 
-async def _set_model_image(img: bytes):
+
+async def _set_model_image(img: bytes) -> None:
     loop = asyncio.get_event_loop()
     loop.run_in_executor(
         None,
@@ -290,12 +400,13 @@ async def _set_model_image(img: bytes):
 def _predict(
     anno_id: str,
     img: Image.Image,
-    points: List[Point] | None,
-    labels: List[float] | None,
-    rects: List[Rect] | None,
+    points: list[Point] | None,
+    labels: list[float] | None,
+    rects: list[Rect] | None,
     threshold: int,
     auto_mode: AutoMode,
-):
+    return_type: ReturnType,
+) -> SamReturn:
     status = False
     msg = ""
     worker_result = None
@@ -307,6 +418,7 @@ def _predict(
                 img=np.asarray(img, dtype=np.uint8),
                 auto_mode=auto_mode,
                 threshold=threshold,
+                return_type=return_type,
             )
             worker_result = worker.run_point(p, l)
             status = True
@@ -318,6 +430,7 @@ def _predict(
                 img=np.asarray(img, dtype=np.uint8),
                 auto_mode=auto_mode,
                 threshold=threshold,
+                return_type=return_type,
             )
             worker_result = worker.run_rect(r)
             status = True
@@ -329,6 +442,6 @@ def _predict(
         anno_id=anno_id,
         status=status,
         msg=msg,
-        mode=auto_mode.name,
-        rects=worker_result,
+        mode=auto_mode.name,  # type: ignore
+        data=worker_result,
     )

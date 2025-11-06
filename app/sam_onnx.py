@@ -1,15 +1,14 @@
 import copy
-from functools import lru_cache
 import hashlib
-from typing import Any, Dict, List, Tuple
+from functools import lru_cache
 
 import cv2
 import numpy as np
 import onnxruntime as ort
 from numpy.typing import NDArray
 
-from logger import ZLogger
-from ztypes import PromptType, SamOnnxEncodedInput, SamOnnxPrompt, SamOnnxResult
+from app.logger import ZLogger
+from app.ztypes import PromptType, SamOnnxEncodedInput, SamOnnxPrompt, SamOnnxResult
 
 
 class SamOnnxModel:
@@ -20,10 +19,10 @@ class SamOnnxModel:
         self.input_size = (1024, 1024)
         self.logger = ZLogger("SamOnnxModel")
         self.img = None
-        self._cache: Dict[str, SamOnnxEncodedInput] = {}
+        self._cache: dict[str, SamOnnxEncodedInput] = {}
 
         # Load models
-        providers: List[str] = ort.get_available_providers()
+        providers: list[str] = ort.get_available_providers()
 
         # Pop TensorRT Runtime due to crashing issues
         # TODO: Add back when TensorRT backend is stable
@@ -46,9 +45,7 @@ class SamOnnxModel:
         providers_decoder = [
             "CPUExecutionProvider",
         ]
-        self.encoder = ort.InferenceSession(
-            encoder_path, sess_options, providers=providers_encoder
-        )
+        self.encoder = ort.InferenceSession(encoder_path, sess_options, providers=providers_encoder)
         self.encoder_input_name: str = self.encoder.get_inputs()[0].name
         self.decoder = ort.InferenceSession(decoder_path, providers=providers_decoder)
 
@@ -62,11 +59,11 @@ class SamOnnxModel:
     def get_encoded_input(self, key: str):
         return self._cache.get(key, None)
 
-    def get_input_points(self, prompt: List[SamOnnxPrompt]):
+    def get_input_points(self, prompt: list[SamOnnxPrompt]):
         """Get input points"""
         points = []
         labels = []
-        for i, mark in enumerate(prompt):
+        for _, mark in enumerate(prompt):
             if mark.type_ == PromptType.POINT:
                 points.append(mark.point)
                 labels.append(mark.label)
@@ -92,7 +89,7 @@ class SamOnnxModel:
         if img.ndim == 3:
             img = np.expand_dims(img, 0)
         encoder_inputs = {self.encoder_input_name: img}
-        image_embedding = self.encoder.run(None, encoder_inputs)[0]
+        image_embedding: np.ndarray = self.encoder.run(None, encoder_inputs)[0]  # type: ignore
         return image_embedding
 
     @staticmethod
@@ -138,8 +135,8 @@ class SamOnnxModel:
     def run_decoder(
         self,
         einput: SamOnnxEncodedInput,
-        prompt: List[SamOnnxPrompt],
-    ):
+        prompt: list[SamOnnxPrompt],
+    ) -> SamOnnxResult:
         """Run decoder"""
         # (N, 2), (N,)
         input_points, input_labels = self.get_input_points(prompt)
@@ -168,9 +165,9 @@ class SamOnnxModel:
         }
         masks, scores, logits = self.decoder.run(None, decoder_inputs)
 
-        return self.decode(masks[0], scores[0])
+        return self.decode(masks[0], scores[0])  # type: ignore
 
-    def encode(self, cv_image: NDArray):
+    def encode(self, cv_image: NDArray) -> SamOnnxEncodedInput:
         """
         Calculate embedding and metadata for a single image.
         """
@@ -203,11 +200,15 @@ class SamOnnxModel:
         self._cache[md5] = res
         return res
 
-    def decode(self, masks: NDArray[np.float32], scores: NDArray[np.float32]):
+    def decode(
+        self,
+        masks: NDArray[np.float32],
+        scores: NDArray[np.float32],
+    ) -> SamOnnxResult:
         idx = np.argmax(scores[:-1])
         return SamOnnxResult((masks[idx] > 0).astype(np.uint8) * 255, scores[idx])
 
-    def predict(self, img: NDArray, prompts: List[SamOnnxPrompt]):
+    def predict(self, img: NDArray, prompts: list[SamOnnxPrompt]) -> SamOnnxResult:
         img_encoded = self.encode(cv_image=img)
         out = self.run_decoder(img_encoded, prompts)
         return out
@@ -217,8 +218,8 @@ class EdgeSam(SamOnnxModel):
     def run_decoder(
         self,
         einput: SamOnnxEncodedInput,
-        prompt: List[SamOnnxPrompt],
-    ):
+        prompt: list[SamOnnxPrompt],
+    ) -> SamOnnxResult:
         """Run decoder"""
         # (N, 2), (N,)
         input_points, input_labels = self.get_input_points(prompt)
@@ -243,15 +244,13 @@ class EdgeSam(SamOnnxModel):
             [einput.original_height, einput.original_width],
             dtype=int,
         )
-        masks = self.postprocess_masks(masks, ori_img_size)
+        masks = self.postprocess_masks(masks, ori_img_size)  # type: ignore
 
-        return self.decode(masks[0], scores[0])
+        return self.decode(masks[0], scores[0])  # type: ignore
 
     def postprocess_masks(self, mask: np.ndarray, original_size: NDArray):
         mask = mask.squeeze(0).transpose(1, 2, 0)
-        mask = cv2.resize(
-            mask, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR
-        )
+        mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
         mask = mask[: self.input_size[0], : self.input_size[1], :]
         mask = cv2.resize(
             mask, (original_size[1], original_size[0]), interpolation=cv2.INTER_LINEAR
