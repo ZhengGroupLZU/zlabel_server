@@ -3,6 +3,7 @@
 提供文件和目录的列表、搜索、操作等功能。
 """
 
+import fnmatch
 from typing import BinaryIO
 from urllib.parse import quote
 
@@ -87,6 +88,32 @@ class FileSystemAPI:
         response_data = self.client.post("/api/fs/list", json=payload)
         return ListResponse(**response_data)
 
+    def glob(
+        self,
+        path: str,
+        pattern: str,
+        password: str = "",
+        refresh: bool = False,
+    ) -> list[str]:
+        all_files = []
+
+        def _glob_internal(current_path: str):
+            try:
+                file_entries = self.ls(current_path, password, refresh=refresh)
+            except Exception:
+                # Ignore directories that cannot be listed
+                return
+
+            for f in file_entries.data.get_files():
+                if fnmatch.fnmatch(f.name, pattern):
+                    all_files.append(f"{current_path.rstrip('/')}/{f.name}")
+
+            for d in file_entries.data.get_dirs():
+                _glob_internal(f"{current_path.rstrip('/')}/{d.name}")
+
+        _glob_internal(path)
+        return all_files
+
     def get(
         self,
         path: str,
@@ -128,7 +155,6 @@ class FileSystemAPI:
             "refresh": refresh,
         }
         response_data = self.client.post("/api/fs/get", json=payload)
-        print(response_data)
         return FileInfoResponse(**response_data)
 
     def get_file_bytes(

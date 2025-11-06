@@ -20,10 +20,11 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from PIL import Image
-from rich import print
+from rich import print  # noqa: F401
 
 import app.db as db
 from app.config import SETTINGS
+from app.logger import ZLogger
 from app.openlist_api import OpenListAPIError, OpenListClient
 from app.sam_onnx import EdgeSam, SamOnnxModel
 from app.worker import AutoMode, ReturnType, ZSamWorker
@@ -32,6 +33,7 @@ from app.ztypes import Annotation, Point, Rect, SamReturn, annotation_checker
 oplist_client = OpenListClient(SETTINGS.oplist_host)
 app = FastAPI()
 
+logger = ZLogger("ZLabelServer")
 
 SAM_MODEL = (
     SamOnnxModel(SETTINGS.encoder_path, SETTINGS.decoder_path)
@@ -54,21 +56,21 @@ def oplist_client_try_run(func: Callable[..., JSONResponse | Response]):
         try:
             return func(*args, **kwargs)
         except OpenListAPIError as e:
-            print(traceback.format_exc())
+            logger.debug(traceback.format_exc())
             return JSONResponse(
                 status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={"message": str(e), "data": None},
                 media_type="application/json",
             )
         except requests.exceptions.HTTPError as e:
-            print(traceback.format_exc())
+            logger.debug(traceback.format_exc())
             return JSONResponse(
                 status_code=e.response.status_code,
                 content={"message": str(e), "data": None},
                 media_type="application/json",
             )
         except Exception as e:
-            print(traceback.format_exc())
+            logger.debug(traceback.format_exc())
             return JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={"message": str(e), "data": None},
@@ -205,7 +207,7 @@ async def get_image(
     name: str,
     authorization: str = Header(None),
 ):
-    path = f"{SETTINGS.oplist_proj_dir}/{SETTINGS.oplist_proj_name}/{name}"
+    path = f"{name}"
     if path in IMAGE_CACHE:
         return Response(content=IMAGE_CACHE[path], media_type="image/png")
     try:
@@ -221,7 +223,7 @@ async def get_image(
             media_type="image/png",
         )
     except Exception as e:
-        print(traceback.format_exc())
+        logger.debug(traceback.format_exc())
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"message": str(e), "data": None},
@@ -288,11 +290,12 @@ async def refresh_tasks(authorization: str):
 
     projects = oplist_client.fs.dirs(SETTINGS.oplist_proj_dir)
     for project in projects.data:
-        img_files = oplist_client.fs.ls(f"{SETTINGS.oplist_proj_dir}/{project.name}")
+        img_files = oplist_client.fs.glob(f"{SETTINGS.oplist_proj_dir}/{project.name}", "*")
+        # logger.debug(img_files)
         img_files_filtered = []
-        for img_file in img_files.data.get_files():
-            if any(img_file.name.lower().endswith(ext) for ext in allowed_image_ext):
-                img_files_filtered.append(img_file.name)
+        for img_file in img_files:
+            if any(img_file.lower().endswith(ext) for ext in allowed_image_ext):
+                img_files_filtered.append(img_file)
         project_list.append(
             {
                 "name": project.name,

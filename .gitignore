@@ -13,6 +13,7 @@ notebooks/
 .env
 *.png
 data/
+*.bak
 
 tasks_json.json
 

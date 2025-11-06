@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
 
 # Install Python 3.13 from deadsnakes PPA
-RUN apt-get update && \
+RUN apt-get clean && apt-get update && \
     apt-get install -y python3 python3-venv python3-pip python3-dev \
             python3-distutils python3-setuptools-whl && \
     apt-get clean

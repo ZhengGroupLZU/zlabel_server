@@ -107,6 +107,7 @@ def create_or_update_projects(projects: list[dict[str, str | list[str]]]):
         }
     ]
     """
+    batch: int = 1000
     with session_maker() as session:
         if session is None:
             return
@@ -119,29 +120,34 @@ def create_or_update_projects(projects: list[dict[str, str | list[str]]]):
         session.execute(stmt_project)
 
         for project in projects:
+            project_files: list[str] = project["files"]  # type: ignore
             project_name: str = project["name"]  # type: ignore
+            if not project_files:
+                continue
+
             query = select(Project).where(Project.name == project_name)
             project_id = session.scalars(query).first()
             assert project_id is not None
 
-            stmt_task = (
-                insert(Task)
-                .values(
-                    [
-                        {
-                            "project_id": project_id.id,
-                            "anno_id": id_md5(
-                                f"{SETTINGS.oplist_proj_dir}/{project_name}/{filename}"
-                            ),
-                            "filename": filename,
-                            "finished": False,
-                        }
-                        for filename in project["files"]
-                    ]
+            for i in range(0, len(project_files), batch):
+                stmt_task = (
+                    insert(Task)
+                    .values(
+                        [
+                            {
+                                "project_id": project_id.id,
+                                "anno_id": id_md5(
+                                    f"{SETTINGS.oplist_proj_dir}/{project_name}/{filename}"
+                                ),
+                                "filename": filename,
+                                "finished": False,
+                            }
+                            for filename in project_files[i : i + batch]
+                        ]
+                    )
+                    .on_conflict_do_nothing()
                 )
-                .on_conflict_do_nothing()
-            )
-            session.execute(stmt_task)
+                session.execute(stmt_task)
 
         session.commit()
 
