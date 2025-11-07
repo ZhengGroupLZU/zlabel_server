@@ -21,6 +21,9 @@ dependencies = [
 name = "tsinghua"
 url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 
+[tool.uv]
+python-install-mirror = "https://gh-proxy.com/https://github.com/astral-sh/python-build-standalone/releases/download"
+
 [tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
