@@ -1,6 +1,5 @@
 import copy
 import hashlib
-from functools import lru_cache
 
 import cv2
 import numpy as np
@@ -45,7 +44,9 @@ class SamOnnxModel:
         providers_decoder = [
             "CPUExecutionProvider",
         ]
-        self.encoder = ort.InferenceSession(encoder_path, sess_options, providers=providers_encoder)
+        self.encoder = ort.InferenceSession(
+            encoder_path, sess_options, providers=providers_encoder
+        )
         self.encoder_input_name: str = self.encoder.get_inputs()[0].name
         self.decoder = ort.InferenceSession(decoder_path, providers=providers_decoder)
 
@@ -244,16 +245,31 @@ class EdgeSam(SamOnnxModel):
             [einput.original_height, einput.original_width],
             dtype=int,
         )
-        masks = self.postprocess_masks(masks, ori_img_size)  # type: ignore
+        masks = self.postprocess_masks(
+            masks,  # type: ignore
+            ori_img_size,
+            (einput.resized_height, einput.resized_width),
+        )
 
         return self.decode(masks[0], scores[0])  # type: ignore
 
-    def postprocess_masks(self, mask: np.ndarray, original_size: NDArray):
+    def postprocess_masks(
+        self,
+        mask: np.ndarray,
+        original_size: np.ndarray,
+        resized_size: tuple[int, int],
+    ):
         mask = mask.squeeze(0).transpose(1, 2, 0)
-        mask = cv2.resize(mask, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
-        mask = mask[: self.input_size[0], : self.input_size[1], :]
         mask = cv2.resize(
-            mask, (original_size[1], original_size[0]), interpolation=cv2.INTER_LINEAR
+            mask,
+            (self.img_size, self.img_size),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        mask = mask[: resized_size[0], : resized_size[1], :]
+        mask = cv2.resize(
+            mask,
+            (original_size[1], original_size[0]),
+            interpolation=cv2.INTER_LINEAR,
         )
         mask = mask.transpose(2, 0, 1)[None, :, :, :]
         return mask

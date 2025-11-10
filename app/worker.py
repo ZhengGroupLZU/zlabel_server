@@ -125,10 +125,12 @@ class ZSamWorker:
 
         # img = cv2.blur(img, (2, 2))
         # for ROI, process ROI
-        _mask = np.zeros_like(mask, dtype=np.uint8) if roi else mask.copy()
+        _mask = mask.copy()
+        offset_x, offset_y = 0, 0
         if roi:
-            x, y, w, h = roi.x, roi.y, roi.w, roi.h
-            _mask[y : y + h, x : x + w] = mask[y : y + h, x : x + w]
+            x, y, w, h = int(roi.x), int(roi.y), int(roi.w), int(roi.h)
+            _mask = mask[y : y + h, x : x + w]
+            offset_x, offset_y = x, y
         canny_out = cv2.Canny(_mask, self.threshold, self.threshold * 2)
         contours, _ = cv2.findContours(
             canny_out,
@@ -146,12 +148,15 @@ class ZSamWorker:
                 rects = [cv2.boundingRect(np.array(new_contours))]
             else:
                 rects = [cv2.boundingRect(m) for m in contours]
-            return self.rect_filter(rects)  # type: ignore
+                rects_with_offset = [(x + offset_x, y + offset_y, w, h) for x, y, w, h in rects]
+            return self.rect_filter(rects_with_offset)  # type: ignore
         # return polygons
         elif return_type == ReturnType.POLYGON:
             polygons = []
             for contour in contours:
                 _contour = contour.copy().reshape(-1, 2).astype(np.float32)
+                _contour[:, 0] += offset_x
+                _contour[:, 1] += offset_y
                 # _contour[:, 0] = _contour[:, 0] / mask.width
                 # _contour[:, 1] = _contour[:, 1] / mask.height
                 polygons.append(Polygon(points=[Point(x=i[0], y=i[1]) for i in _contour]))
