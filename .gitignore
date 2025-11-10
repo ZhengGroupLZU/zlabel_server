@@ -7,9 +7,15 @@ build/
 dist/
 wheels/
 *.egg-info
-*.ipynb
+notebooks/
 *.onnx
 *.db
+.env
+*.png
+data/
+*.bak
+python-install
+models/
 
 tasks_json.json
 

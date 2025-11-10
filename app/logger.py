@@ -1,5 +1,9 @@
 import logging
+
 from rich.logging import RichHandler
+
+MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+BACKUP_COUNT = 5
 
 
 class ZLogger(logging.Logger):

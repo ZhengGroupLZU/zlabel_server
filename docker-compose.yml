@@ -1,0 +1,58 @@
+services:
+  zlabel_server:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./assets:/app/assets
+      - ./data/zlabel_server:/app/data
+    environment:
+      - ZLSERVER_DATABASE_URL=data/zlabel_server.db
+      - ZLSERVER_VERSION=1.0.0
+      # - ZLSERVER_MODEL_NAME=EdgeSAM
+      # - ZLSERVER_ENCODER_PATH=assets/edge_sam_3x_encoder.onnx
+      # - ZLSERVER_DECODER_PATH=assets/edge_sam_3x_decoder.onnx
+      - ZLSERVER_MODEL_NAME=SAM
+      - ZLSERVER_ENCODER_PATH=assets/sam_vit_b_encoder_quantized.onnx
+      - ZLSERVER_DECODER_PATH=assets/sam_vit_b_decoder_quantized.onnx
+      - ZLSERVER_OPLIST_HOST=http://172.20.0.3:5244
+      - ZLSERVER_OPLIST_PROJ_DIR=/zlabel_server/projects
+      - ZLSERVER_OPLIST_PROJ_NAME=seed_germ_anno
+      - ZLSERVER_IMAGE_CACHE_SIZE=100
+    networks:
+      zlabel_server_network:
+        ipv4_address: 172.20.0.2
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    depends_on:
+      - openlist
+    restart: unless-stopped
+
+  openlist:
+    image: 'openlistteam/openlist:latest'
+    container_name: openlist
+    user: '0:0' # Please replace `0:0` with the actual user ID and group ID you want to use to run OpenList.
+    volumes:
+      - './data/openlist:/opt/openlist/data'
+      - '/mnt/datasets:/mnt/datasets'
+    ports:
+      - '5244:5244'
+    environment:
+      - UMASK=022
+    networks:
+      zlabel_server_network:
+        ipv4_address: 172.20.0.3
+    restart: unless-stopped
+
+networks:
+      zlabel_server_network:
+        driver: bridge
+        ipam:
+          config:
+            - subnet: 172.20.0.0/24
