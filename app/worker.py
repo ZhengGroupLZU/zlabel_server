@@ -148,8 +148,8 @@ class ZSamWorker:
                 rects = [cv2.boundingRect(np.array(new_contours))]
             else:
                 rects = [cv2.boundingRect(m) for m in contours]
-                rects_with_offset = [(x + offset_x, y + offset_y, w, h) for x, y, w, h in rects]
-            return self.rect_filter(rects_with_offset)  # type: ignore
+                rects = [(x + offset_x, y + offset_y, w, h) for x, y, w, h in rects]
+            return self.rect_filter(rects)  # type: ignore
         # return polygons
         elif return_type == ReturnType.POLYGON:
             polygons = []
