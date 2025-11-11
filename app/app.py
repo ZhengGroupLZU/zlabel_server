@@ -26,7 +26,7 @@ import app.db as db
 from app.config import SETTINGS
 from app.logger import ZLogger
 from app.openlist_api import OpenListAPIError, OpenListClient
-from app.sam_onnx import EdgeSam, SamOnnxModel
+from app.sam_onnx import SAM2, EdgeSam, SamOnnxModel
 from app.worker import AutoMode, ReturnType, ZSamWorker
 from app.ztypes import Annotation, Point, Rect, SamReturn, annotation_checker
 
@@ -35,11 +35,15 @@ app = FastAPI()
 
 logger = ZLogger("ZLabelServer")
 
-SAM_MODEL = (
+SAM_MODEL: SamOnnxModel
+if SETTINGS.model_name == "SAM":
     SamOnnxModel(SETTINGS.encoder_path, SETTINGS.decoder_path)
-    if SETTINGS.model_name == "SAM"
-    else EdgeSam(SETTINGS.encoder_path, SETTINGS.decoder_path)
-)
+elif SETTINGS.model_name == "EdgeSAM":
+    SAM_MODEL = EdgeSam(SETTINGS.encoder_path, SETTINGS.decoder_path)
+elif SETTINGS.model_name == "SAM2":
+    SAM_MODEL = SAM2(SETTINGS.encoder_path, SETTINGS.decoder_path)
+else:
+    raise ValueError(f"Unknown model name: {SETTINGS.model_name}")
 
 
 IMAGE_CACHE = OrderedDict()
@@ -274,7 +278,9 @@ async def get_zlabel(name: str, authorization: str = Header(None)):
     def get_zlabel_func():
         oplist_client.set_token(authorization)
 
-        file_bytes = oplist_client.fs.get_file_bytes(f"{SETTINGS.oplist_zlabel_save_dir}/{name}")
+        file_bytes = oplist_client.fs.get_file_bytes(
+            f"{SETTINGS.oplist_zlabel_save_dir}/{name}"
+        )
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content=json.loads(file_bytes.decode("utf-8")),
@@ -283,14 +289,17 @@ async def get_zlabel(name: str, authorization: str = Header(None)):
     return get_zlabel_func()
 
 
-async def refresh_tasks(authorization: str):
+@app.get("/api/v1/refresh_tasks")
+async def refresh_tasks(authorization: str = Header(None)):
     allowed_image_ext = [".png", ".jpg", ".jpeg"]
     oplist_client.set_token(authorization)
     project_list = []
 
     projects = oplist_client.fs.dirs(SETTINGS.oplist_proj_dir)
     for project in projects.data:
-        img_files = oplist_client.fs.glob(f"{SETTINGS.oplist_proj_dir}/{project.name}", "*")
+        img_files = oplist_client.fs.glob(
+            f"{SETTINGS.oplist_proj_dir}/{project.name}", "*"
+        )
         # logger.debug(img_files)
         img_files_filtered = []
         for img_file in img_files:
@@ -306,12 +315,17 @@ async def refresh_tasks(authorization: str):
 
 
 @app.get("/api/v1/get_tasks")
-async def get_tasks(num: int = 30, finished: int = -1, authorization: str = Header(None)):
+async def get_tasks(
+    project_id: int = -1,
+    num: int = 30,
+    finished: int = -1,
+    authorization: str = Header(None),
+):
     """
     finished: -1: all, 0: unfinished, 1: finished
     """
-    await refresh_tasks(authorization)
-    tasks = db.get_tasks(num, finished)
+    # await refresh_tasks(authorization)
+    tasks = db.get_tasks(project_id, num, finished)
     res = [
         {
             "id": task.id,
@@ -322,6 +336,23 @@ async def get_tasks(num: int = 30, finished: int = -1, authorization: str = Head
             "finished": task.finished,
         }
         for task in tasks
+    ]
+    return JSONResponse(
+        content={"message": "success", "data": res},
+        status_code=status.HTTP_200_OK,
+        media_type="application/json",
+    )
+
+
+@app.get("/api/v1/get_projects")
+async def get_projects():
+    projects = db.get_projects()
+    res = [
+        {
+            "id": project.id,
+            "name": project.name,
+        }
+        for project in projects
     ]
     return JSONResponse(
         content={"message": "success", "data": res},

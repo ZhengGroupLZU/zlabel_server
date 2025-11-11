@@ -60,9 +60,13 @@ class Task(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
     anno_id: Mapped[str] = mapped_column(String, unique=True)
     filename: Mapped[str]
-    labels: Mapped[list["Label"]] = relationship(secondary=link_task_label, back_populates="tasks")
+    labels: Mapped[list["Label"]] = relationship(
+        secondary=link_task_label, back_populates="tasks"
+    )
     finished: Mapped[bool]
-    users: Mapped[list["User"]] = relationship(secondary=link_task_user, back_populates="tasks")
+    users: Mapped[list["User"]] = relationship(
+        secondary=link_task_user, back_populates="tasks"
+    )
 
     def __repr__(self) -> str:
         return f"Task(id={self.id}, anno_id={self.anno_id}, filename={self.filename}, labels={self.labels}, finished={self.finished}, users={self.users})"
@@ -70,10 +74,14 @@ class Task(Base):
 
 class Label(Base):
     __tablename__ = "labels"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, unique=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, unique=True, autoincrement=True
+    )
     name: Mapped[str] = mapped_column(String, unique=True)
     color: Mapped[str] = mapped_column(String, default="#000000")
-    tasks: Mapped[list["Task"]] = relationship(secondary=link_task_label, back_populates="labels")
+    tasks: Mapped[list["Task"]] = relationship(
+        secondary=link_task_label, back_populates="labels"
+    )
 
     def __repr__(self) -> str:
         return f"Label(id={self.id}, name={self.name}, color={self.color})"
@@ -81,10 +89,14 @@ class Label(Base):
 
 class User(Base):
     __tablename__ = "users"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, unique=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, unique=True, autoincrement=True
+    )
     name: Mapped[str] = mapped_column(String, unique=True)
     finished_count: Mapped[int] = mapped_column(Integer, default=0)
-    tasks: Mapped[list["Task"]] = relationship(secondary=link_task_user, back_populates="users")
+    tasks: Mapped[list["Task"]] = relationship(
+        secondary=link_task_user, back_populates="users"
+    )
 
     def __repr__(self) -> str:
         return f"User(id={self.id}, name={self.name}, finished_count={self.finished_count})"
@@ -115,7 +127,9 @@ def create_or_update_projects(projects: list[dict[str, str | list[str]]]):
             return
 
         stmt_project = (
-            insert(Project).values([{"name": p["name"]} for p in projects]).on_conflict_do_nothing()
+            insert(Project)
+            .values([{"name": p["name"]} for p in projects])
+            .on_conflict_do_nothing()
         )
         session.execute(stmt_project)
 
@@ -169,7 +183,9 @@ def insert_data(
             assert tmp is not None
 
             task_user = [{"task_id": task["id"], "user_id": t.id} for t in tmp]
-            stmt_task_user = insert(link_task_user).values(task_user).on_conflict_do_nothing()
+            stmt_task_user = (
+                insert(link_task_user).values(task_user).on_conflict_do_nothing()
+            )
             session.execute(stmt_task_user)
         if task and label:
             stmt_label = insert(Label).values(label).on_conflict_do_nothing()
@@ -180,7 +196,9 @@ def insert_data(
             assert tmp is not None
 
             task_label = [{"task_id": task["id"], "label_id": t.id} for t in tmp]
-            stmt_task_label = insert(link_task_label).values(task_label).on_conflict_do_nothing()
+            stmt_task_label = (
+                insert(link_task_label).values(task_label).on_conflict_do_nothing()
+            )
             session.execute(stmt_task_label)
 
         if task:
@@ -220,7 +238,9 @@ def insert_link_table(anno_id: str, label_name: str = "", user_name: str = ""):
 
         label = session.scalar(select(Label).where(Label.name == label_name))
         if label is not None:
-            stmt = insert(link_task_label).values({"task_id": task.id, "label_id": label.id})
+            stmt = insert(link_task_label).values(
+                {"task_id": task.id, "label_id": label.id}
+            )
             session.execute(stmt)
         user = session.scalar(select(User).where(User.name == user_name))
         if user is None:
@@ -236,22 +256,32 @@ def insert_link_table(anno_id: str, label_name: str = "", user_name: str = ""):
         session.commit()
 
 
-def get_tasks(num: int = 50, finished: int = 1) -> list[Task]:
+def get_tasks(project: int = -1, num: int = 50, finished: int = 1) -> list[Task]:
     with session_maker() as session:
         if session is None:
             return []
         query = select(Task).limit(num)
+        condition = Task.project_id == project if project > -1 else True
         if finished == -1:
             stmt = query
         elif finished == 0:
-            stmt = query.where(Task.finished == False)
+            stmt = query.where(condition and Task.finished == False)
         elif finished == 1:
-            stmt = query.where(Task.finished == True)
+            stmt = query.where(condition and Task.finished == True)
         else:
             raise ValueError("finished must be -1, 0 or 1")
         tasks = session.scalars(stmt).all()
         _ = [t.labels for t in tasks]
     return list(tasks)
+
+
+def get_projects() -> list[Project]:
+    with session_maker() as session:
+        if session is None:
+            return []
+        query = select(Project).order_by(Project.id)
+        projects = session.scalars(query).all()
+        return list(projects)
 
 
 def how_many_finished() -> int:

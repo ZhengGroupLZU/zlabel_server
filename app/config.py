@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     version: str = "1.0.0"
 
     database_url: str = "./zlabel_server.db"
-    model_name: Literal["SAM", "EdgeSAM"] = "EdgeSAM"
+    model_name: Literal["SAM", "EdgeSAM", "SAM2"] = "EdgeSAM"
     encoder_path: str = "assets/edge_sam_3x_encoder.onnx"
     decoder_path: str = "assets/edge_sam_3x_decoder.onnx"
 

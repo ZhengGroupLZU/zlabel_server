@@ -157,3 +157,5 @@ class SamOnnxEncodedInput:
     original_width: int
     resized_height: int
     resized_width: int
+    high_res_feats_0: np.ndarray | None = None  # SAM2
+    high_res_feats_1: np.ndarray | None = None  # SAM2
