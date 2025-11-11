@@ -37,7 +37,7 @@ logger = ZLogger("ZLabelServer")
 
 SAM_MODEL: SamOnnxModel
 if SETTINGS.model_name == "SAM":
-    SamOnnxModel(SETTINGS.encoder_path, SETTINGS.decoder_path)
+    SAM_MODEL = SamOnnxModel(SETTINGS.encoder_path, SETTINGS.decoder_path)
 elif SETTINGS.model_name == "EdgeSAM":
     SAM_MODEL = EdgeSam(SETTINGS.encoder_path, SETTINGS.decoder_path)
 elif SETTINGS.model_name == "SAM2":
