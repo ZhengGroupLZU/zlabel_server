@@ -319,29 +319,47 @@ async def get_tasks(
     project_id: int = -1,
     num: int = 30,
     finished: int = -1,
+    random: bool = True,
     authorization: str = Header(None),
 ):
     """
     finished: -1: all, 0: unfinished, 1: finished
     """
     # await refresh_tasks(authorization)
-    tasks = db.get_tasks(project_id, num, finished)
-    res = [
-        {
-            "id": task.id,
-            "project_id": task.project_id,
-            "anno_id": task.anno_id,
-            "filename": task.filename,
-            "labels": [label.name for label in task.labels],
-            "finished": task.finished,
-        }
-        for task in tasks
-    ]
-    return JSONResponse(
-        content={"message": "success", "data": res},
-        status_code=status.HTTP_200_OK,
-        media_type="application/json",
-    )
+
+    try:
+        oplist_client.set_token(authorization)
+        resp = oplist_client.auth.get_current_user()
+        if not resp.data.id:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"message": "failed", "data": "Unauthorized"},
+                media_type="application/json",
+            )
+        tasks = db.get_tasks(project_id, num, finished, random)
+        res = [
+            {
+                "id": task.id,
+                "project_id": task.project_id,
+                "anno_id": task.anno_id,
+                "filename": task.filename,
+                "labels": [label.name for label in task.labels],
+                "finished": task.finished,
+            }
+            for task in tasks
+        ]
+        return JSONResponse(
+            content={"message": "success", "data": res},
+            status_code=status.HTTP_200_OK,
+            media_type="application/json",
+        )
+    except Exception as e:
+        logger.debug(traceback.format_exc())
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"message": str(e), "data": None},
+            media_type="application/json",
+        )
 
 
 @app.get("/api/v1/get_projects")

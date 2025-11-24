@@ -256,21 +256,37 @@ def insert_link_table(anno_id: str, label_name: str = "", user_name: str = ""):
         session.commit()
 
 
-def get_tasks(project: int = -1, num: int = 50, finished: int = 1) -> list[Task]:
+def get_tasks(
+    project: int = -1,
+    num: int = 50,
+    finished: int = 1,
+    random: bool = True,
+) -> list[Task]:
+    """
+    @param finished
+        -1: all
+        0: unfinished
+        1: finished
+    """
     with session_maker() as session:
         if session is None:
             return []
-        query = select(Task).limit(num)
-        condition = Task.project_id == project if project > -1 else True
+        query = select(Task)
+        if project > -1:
+            query = query.where(Task.project_id == project)
         if finished == -1:
-            stmt = query
+            ...
         elif finished == 0:
-            stmt = query.where(condition and Task.finished == False)
+            query = query.where(Task.finished == False)
         elif finished == 1:
-            stmt = query.where(condition and Task.finished == True)
+            query = query.where(Task.finished == True)
         else:
             raise ValueError("finished must be -1, 0 or 1")
-        tasks = session.scalars(stmt).all()
+        if random:
+            query = query.order_by(func.random()).limit(num)
+        else:
+            query = query.order_by(Task.id).limit(num)
+        tasks = session.scalars(query).all()
         _ = [t.labels for t in tasks]
     return list(tasks)
 
