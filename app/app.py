@@ -289,10 +289,21 @@ async def get_zlabel(name: str, authorization: str = Header(None)):
     return get_zlabel_func()
 
 
-@app.get("/api/v1/refresh_tasks")
-async def refresh_tasks(authorization: str = Header(None)):
+@app.api_route(
+    "/api/v1/refresh_tasks",
+    methods=["GET", "POST"],
+    response_class=JSONResponse,
+)
+async def refresh_tasks(username: str = Query(...), password: str = Query(...)):
+    response = oplist_client.auth.login(username, password)
+    if response.data.token is None:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"message": "failed", "data": "Unauthorized"},
+            media_type="application/json",
+        )
     allowed_image_ext = [".png", ".jpg", ".jpeg"]
-    oplist_client.set_token(authorization)
+    oplist_client.set_token(response.data.token)
     project_list = []
 
     projects = oplist_client.fs.dirs(SETTINGS.oplist_proj_dir)
@@ -312,6 +323,12 @@ async def refresh_tasks(authorization: str = Header(None)):
             }
         )
         db.create_or_update_projects(project_list)
+
+    return JSONResponse(
+        content={"message": "success", "data": None},
+        status_code=status.HTTP_200_OK,
+        media_type="application/json",
+    )
 
 
 @app.get("/api/v1/get_tasks")
