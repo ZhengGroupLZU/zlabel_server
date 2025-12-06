@@ -153,9 +153,11 @@ class SamOnnxPrompt:
 @dataclass
 class SamOnnxEncodedInput:
     image_embedding: NDArray[np.float32]
-    original_height: int
-    original_width: int
-    resized_height: int
-    resized_width: int
+    original_size: tuple[int, int]  # (H, W)
+    resized_size: tuple[int, int]  # (H, W)
+
+
+@dataclass
+class SAM2EncodedInput(SamOnnxEncodedInput):
     high_res_feats_0: np.ndarray | None = None  # SAM2
     high_res_feats_1: np.ndarray | None = None  # SAM2
