@@ -155,9 +155,12 @@ class SamOnnxModel:
     ):
         # H, W -> H, W, C
         assert mask.ndim == 2, f"{mask.shape=}"
-        # print(f"{mask.shape=}, {original_size=}, {resized_size=}")
+        # self.logger.debug(f"{mask.shape=}, {original_size=}, {resized_size=}")
+        # self.logger.debug(f"{mask.min()=}, {mask.max()=}")
         mask[mask < 0] = 0
+        mask[mask > 0] += 255 - mask.max()
         mask = mask.astype(np.uint8)
+        cv2.imwrite("mask.png", mask)
         if mask.shape == original_size:
             return mask
         mask = cv2.resize(
@@ -436,5 +439,4 @@ class SAM2(SamOnnxModel):
         return results
 
 
-class SlimSAM(SamOnnxModel):
-    ...
+class SlimSAM(SamOnnxModel): ...

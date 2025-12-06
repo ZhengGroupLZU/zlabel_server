@@ -9,8 +9,8 @@ class Settings(BaseSettings):
 
     database_url: str = "./zlabel_server.db"
     model_name: Literal["SAM", "EdgeSAM", "SAM2", "SlimSAM"] = "SlimSAM"
-    encoder_path: str = "assets/edge_sam_3x_encoder.onnx"
-    decoder_path: str = "assets/edge_sam_3x_decoder.onnx"
+    encoder_path: str = ""
+    decoder_path: str = ""
 
     oplist_host: str = "http://127.0.0.1:5244"
     oplist_username: str = ""
@@ -20,7 +20,11 @@ class Settings(BaseSettings):
 
     image_cache_size: int = 100
 
-    model_config = SettingsConfigDict(env_prefix="ZLSERVER_")
+    model_config = SettingsConfigDict(
+        env_prefix="ZLSERVER_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+    )
 
     @property
     def oplist_zlabel_save_dir(self):

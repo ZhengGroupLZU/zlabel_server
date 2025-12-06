@@ -26,7 +26,7 @@ import app.db as db
 from app.config import SETTINGS
 from app.logger import ZLogger
 from app.openlist_api import OpenListAPIError, OpenListClient
-from app.sam_onnx import SAM2, EdgeSam, SamOnnxModel
+from app.sam_onnx import SAM2, EdgeSam, SamOnnxModel, SlimSAM
 from app.worker import AutoMode, ReturnType, ZSamWorker
 from app.ztypes import Annotation, Point, Rect, SamReturn, annotation_checker
 
@@ -42,6 +42,8 @@ elif SETTINGS.model_name == "EdgeSAM":
     SAM_MODEL = EdgeSam(SETTINGS.encoder_path, SETTINGS.decoder_path)
 elif SETTINGS.model_name == "SAM2":
     SAM_MODEL = SAM2(SETTINGS.encoder_path, SETTINGS.decoder_path)
+elif SETTINGS.model_name == "SlimSAM":
+    SAM_MODEL = SlimSAM(SETTINGS.encoder_path, SETTINGS.decoder_path)
 else:
     raise ValueError(f"Unknown model name: {SETTINGS.model_name}")
 
