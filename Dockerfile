@@ -20,14 +20,14 @@ WORKDIR /app
 RUN python3 -m pip install uv -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # Copy project files
-COPY ./app /app/app
 COPY ./.python-version /app/.python-version
 COPY ./pyproject.toml /app/pyproject.toml
 COPY ./uv.lock /app/uv.lock
+COPY ./app /app/app
 
 RUN uv sync
 
 EXPOSE 8000
 
 # Define the command to run the application
-CMD ["uv", "run", "fastapi", "run", "app/app.py", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "fastapi", "run", "app/app.py", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
