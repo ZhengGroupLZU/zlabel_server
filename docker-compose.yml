@@ -17,6 +17,7 @@ services:
       - ZLSERVER_OPLIST_PROJ_DIR=/zlabel_server/projects
       - ZLSERVER_OPLIST_PROJ_NAME=seed_germ_1280
       - ZLSERVER_IMAGE_CACHE_SIZE=100
+      - ZLSERVER_MIN_CONTOUR_AREA_RATIO=3.0e-5
     networks:
       zlabel_server_network:
         ipv4_address: 172.20.0.2

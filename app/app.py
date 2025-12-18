@@ -490,6 +490,7 @@ def _predict(
                 auto_mode=auto_mode,
                 threshold=threshold,
                 return_type=return_type,
+                min_contour_area_ratio=SETTINGS.min_contour_area_ratio,
             )
             worker_result = worker.run_point(p, l)
             status = True
@@ -502,6 +503,7 @@ def _predict(
                 auto_mode=auto_mode,
                 threshold=threshold,
                 return_type=return_type,
+                min_contour_area_ratio=SETTINGS.min_contour_area_ratio,
             )
             worker_result = worker.run_rect(r)
             status = True

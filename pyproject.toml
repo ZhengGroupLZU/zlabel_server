@@ -24,6 +24,9 @@ url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 [tool.uv]
 python-install-mirror = "https://gh-proxy.com/https://github.com/astral-sh/python-build-standalone/releases/download"
 
+[tool.ruff]
+line-length = 110
+
 [tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors
@@ -48,4 +51,6 @@ ignore = [
 [dependency-groups]
 dev = [
     "ipykernel>=7.1.0",
+    "joblib>=1.5.2",
+    "pycocotools>=2.0.10",
 ]

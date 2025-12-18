@@ -29,7 +29,7 @@ class ZSamWorker:
         auto_mode: AutoMode = AutoMode.CV,
         threshold: int = 100,
         return_type: ReturnType = ReturnType.RECT,
-        min_contour_area_ratio: float = 1.0e-4,
+        min_contour_area_ratio: float = 3.0e-5,
         apply_nms: bool = True,
         iou_threshold: float = 0.5,
     ) -> None:

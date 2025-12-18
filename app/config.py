@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     oplist_proj_name: str = ""
 
     image_cache_size: int = 100
+    min_contour_area_ratio: float = 3.0e-5
 
     model_config = SettingsConfigDict(
         env_prefix="ZLSERVER_",
