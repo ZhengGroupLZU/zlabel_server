@@ -161,3 +161,11 @@ class SamOnnxEncodedInput:
 class SAM2EncodedInput(SamOnnxEncodedInput):
     high_res_feats_0: np.ndarray | None = None  # SAM2
     high_res_feats_1: np.ndarray | None = None  # SAM2
+
+
+@dataclass
+class SAM3EncodedInput(SamOnnxEncodedInput):
+    # image_embedding: NDArray[np.float32] is fpn_feat_0 [batch, 256, 288, 288]    FLOAT
+    fpn_feat_1: np.ndarray | None = None  # SAM3  [batch, 256, 144, 144]    FLOAT
+    fpn_feat_2: np.ndarray | None = None  # SAM3 [batch, 256, 72, 72]      FLOAT
+    fpn_pos_2: np.ndarray | None = None  # SAM3 [batch, 256, 72, 72]      FLOAT

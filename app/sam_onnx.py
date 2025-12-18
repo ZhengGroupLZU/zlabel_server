@@ -10,6 +10,7 @@ from app.logger import ZLogger
 from app.ztypes import (
     PromptType,
     SAM2EncodedInput,
+    SAM3EncodedInput,
     SamOnnxEncodedInput,
     SamOnnxPrompt,
     SamOnnxResult,
@@ -440,3 +441,116 @@ class SAM2(SamOnnxModel):
 
 
 class SlimSAM(SamOnnxModel): ...
+
+class SAM3(SamOnnxModel):
+    def run_encoder(
+        self,
+        img: NDArray,
+        original_size: tuple[int, int],
+        resized_size: tuple[int, int],
+    ) -> SAM3EncodedInput:
+        """Run encoder"""
+        encoder_inputs = {self.encoder_input_name: img}
+        (
+            fpn_feat_0,
+            fpn_feat_1,
+            fpn_feat_2,
+            fpn_pos_2,
+        ) = self.encoder.run(None, encoder_inputs)  # type: ignore
+        res = SAM3EncodedInput(
+            fpn_feat_0,  # type: ignore
+            original_size=original_size,
+            resized_size=resized_size,
+            fpn_feat_1=fpn_feat_1,  # type: ignore
+            fpn_feat_2=fpn_feat_2,  # type: ignore
+            fpn_pos_2=fpn_pos_2,  # type: ignore
+        )
+        return res
+
+    def run_decoder(
+        self,
+        decoder_inputs: dict[str, NDArray],
+        original_size: tuple[int, int],
+        resized_size: tuple[int, int],
+        postprocess: bool = True,
+    ) -> list[SamOnnxResult]:
+        outputs: list[np.ndarray] = self.decoder.run(None, decoder_inputs)  # type: ignore
+        # masks: (B, N, 256, 256)
+        # scores: (B, N)
+        masks, scores = outputs[0], outputs[1]
+        # only use the first result
+        masks, scores = masks[0], scores[0]
+        assert isinstance(masks, np.ndarray) and isinstance(scores, np.ndarray)
+        # masks: (N, 256, 256)
+        # scores: (N,)
+        assert masks.shape[0] == scores.shape[0]
+        assert masks.ndim == 3 and scores.ndim == 1
+
+        results: list[SamOnnxResult] = []
+        for idx in range(len(scores)):
+            results.append(
+                SamOnnxResult(
+                    mask=self.postprocess_mask(
+                        masks[idx],
+                        original_size,
+                        resized_size,
+                    )
+                    if postprocess
+                    else masks[idx],
+                    score=scores[idx],
+                )
+            )
+        sorted_results = sorted(results, key=lambda x: x.score, reverse=True)
+        return sorted_results
+
+    def decode(
+        self,
+        einput: SAM3EncodedInput,
+        prompt: list[SamOnnxPrompt],
+    ) -> list[SamOnnxResult]:
+        """Run decoder"""
+        assert einput.image_embedding is not None
+        assert einput.fpn_feat_1 is not None
+        assert einput.fpn_feat_2 is not None
+        assert einput.fpn_pos_2 is not None
+
+        # (N, 2), (N,)
+        input_points, input_labels = self.get_input_points(prompt)
+
+        onnx_coord, onnx_label = self.transform_point_labels(
+            input_points,
+            input_labels,
+            einput.original_size,
+            einput.resized_size,
+        )
+        onnx_mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
+        onnx_has_mask_input = np.zeros(1, dtype=np.float32)
+        
+        # Inputs:
+        #  input_boxes           [batch, num_boxes, 4]     FLOAT
+        #  input_boxes_labels    [batch, num_boxes]        INT64
+        #  fpn_feat_2            [batch, 256, 72, 72]      FLOAT
+        #  fpn_pos_2             [batch, 256, 72, 72]      FLOAT
+
+        # Outputs:
+        #  geometry_features     [batch, num_boxes+1, 256] FLOAT
+        #  geometry_mask         [batch, num_boxes+1]      BOOL
+        # geo_encoder_outputs = 
+
+        decoder_inputs = {
+            "fpn_feat_0": einput.image_embedding,
+            "fpn_feat_1": einput.fpn_feat_1,
+            "fpn_feat_2": einput.fpn_feat_2,
+            "fpn_pos_2": einput.fpn_pos_2,
+            "point_coords": onnx_coord,
+            "point_labels": onnx_label,
+            "mask_input": onnx_mask_input,
+            "has_mask_input": onnx_has_mask_input,
+        }
+        results = self.run_decoder(
+            decoder_inputs,
+            einput.original_size,
+            einput.resized_size,
+        )
+
+        return results
