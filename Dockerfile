@@ -30,4 +30,4 @@ RUN uv sync
 EXPOSE 8000
 
 # Define the command to run the application
-CMD ["uv", "run", "fastapi", "run", "app/app.py", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["uv", "run", "fastapi", "run", "app/app.py", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
