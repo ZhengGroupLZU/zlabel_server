@@ -61,22 +61,25 @@ class ZSamWorker:
         points: list[Point],
         labels: list[float],
     ) -> Sequence[Rect | Polygon | str]:
-        result_rects: list[cv2t.Rect] = []
+        final_results: list[Rect | Polygon | str] = []
         match self.auto_mode:
             # single point
             case AutoMode.SAM:
                 # regard multiple points as single point
-                prompts = [
-                    SamOnnxPrompt.new(p, label) for p, label in zip(points, labels)
-                ]
-                r = self.run_sam(self.img, prompts)
-                return self.postprocess_mask(
-                    r.mask,
-                    merge_one=True,
-                    min_contour_area_ratio=self.min_contour_area_ratio,
-                    apply_nms=self.apply_nms,
-                    iou_threshold=self.iou_threshold,
-                )
+                prompts = [SamOnnxPrompt.new(p, label) for p, label in zip(points, labels)]
+                results = self.run_sam(self.img, prompts)
+                for r in results:
+                    final_results.extend(
+                        self.postprocess_mask(
+                            r.mask.astype(np.uint8),
+                            merge_one=True,
+                            min_contour_area_ratio=self.min_contour_area_ratio,
+                            apply_nms=self.apply_nms,
+                            iou_threshold=self.iou_threshold,
+                        )
+                    )
+
+                return final_results
             # whole image by CV
             case AutoMode.CV:
                 return self.postprocess_mask(
@@ -90,23 +93,24 @@ class ZSamWorker:
                 raise NotImplementedError
             case _:
                 raise NotImplementedError
-        return [Rect(x=x, y=y, w=w, h=h) for x, y, w, h in result_rects]
+        return final_results
 
     def run_rect(self, rects: list[Rect]) -> Sequence[Rect | Polygon | str]:
         results: Sequence[Rect | Polygon | str] = []
         match self.auto_mode:
             case AutoMode.SAM:
                 for rect in rects:
-                    prompts = [SamOnnxPrompt.new(rect, 0)]
-                    r = self.run_sam(self.img, prompts)
-                    results.extend(
-                        self.postprocess_mask(
-                            r.mask,
-                            min_contour_area_ratio=self.min_contour_area_ratio,
-                            apply_nms=self.apply_nms,
-                            iou_threshold=self.iou_threshold,
+                    prompts = [SamOnnxPrompt.new(rect, 1)]
+                    _results = self.run_sam(self.img, prompts)
+                    for r in _results:
+                        results.extend(
+                            self.postprocess_mask(
+                                r.mask.astype(np.uint8),
+                                min_contour_area_ratio=self.min_contour_area_ratio,
+                                apply_nms=self.apply_nms,
+                                iou_threshold=self.iou_threshold,
+                            )
                         )
-                    )
             case AutoMode.CV:
                 for rect in rects:
                     r = self.postprocess_mask(
@@ -127,35 +131,31 @@ class ZSamWorker:
                         apply_nms=self.apply_nms,
                         iou_threshold=self.iou_threshold,
                     )  # type: ignore
-                    centers = [
-                        Point(x=rect.x + r.x + r.w / 2, y=rect.y + r.y + r.h / 2)
-                        for r in rects0
-                    ]
+                    centers = [Point(x=rect.x + r.x + r.w / 2, y=rect.y + r.y + r.h / 2) for r in rects0]
                     tmp = [SamOnnxPrompt.new(pp, 1) for pp in centers]
-                    r = self.run_sam(self.img, tmp)
-                    results.extend(
-                        self.postprocess_mask(
-                            r.mask,
-                            min_contour_area_ratio=self.min_contour_area_ratio,
-                            apply_nms=self.apply_nms,
-                            iou_threshold=self.iou_threshold,
+                    _results = self.run_sam(self.img, tmp)
+                    for r in _results:
+                        results.extend(
+                            self.postprocess_mask(
+                                r.mask.astype(np.uint8),
+                                min_contour_area_ratio=self.min_contour_area_ratio,
+                                apply_nms=self.apply_nms,
+                                iou_threshold=self.iou_threshold,
+                            )
                         )
-                    )
             case _:
                 raise NotImplementedError
         # self.plot(result_rects)
-        return results
+        return self.results_filter(results)
 
     def run_sam(
         self,
         img: NDArray,
         prompts: list[SamOnnxPrompt],
-    ) -> SamOnnxResult:
+    ) -> list[SamOnnxResult]:
         if len(prompts) == 0:
-            return SamOnnxResult(np.array([[]]), 0.0)
+            return [SamOnnxResult(np.array([[]]), 0.0)]
         out = self.model.predict(img, prompts)
-        if isinstance(out, list):
-            return out[0]
         return out
 
     def postprocess_mask(
@@ -194,8 +194,6 @@ class ZSamWorker:
         contours = self.contour_filter(
             contours,
             min_area_ratio=min_contour_area_ratio,
-            apply_nms=apply_nms,
-            iou_threshold=iou_threshold,
         )
         # contours = [cv2.approxPolyDP(c, 3, True) for c in contours]
 
@@ -219,41 +217,31 @@ class ZSamWorker:
                 _contour[:, 1] += offset_y
                 # _contour[:, 0] = _contour[:, 0] / mask.width
                 # _contour[:, 1] = _contour[:, 1] / mask.height
-                polygons.append(
-                    Polygon(points=[Point(x=i[0], y=i[1]) for i in _contour])
-                )
+                polygons.append(Polygon(points=[Point(x=i[0], y=i[1]) for i in _contour]))
             return polygons
         else:
             raise NotImplementedError
 
-    def nms_contours(
+    def nms_filter(
         self,
-        contours: list[cv2t.MatLike],
+        boxes: list[tuple[float, float, float, float]],
         iou_threshold: float = 0.5,
-    ) -> list[cv2t.MatLike]:
+    ) -> list[int]:
         """
-        Apply Non-Maximum Suppression (NMS) to contours to remove highly overlapping contours.
-
-        Args:
-            contours: List of contours to apply NMS to
-            iou_threshold: IoU threshold for suppression (default: 0.5)
-                Contours with IoU > threshold will be suppressed, keeping only the largest one
+        Apply Non-Maximum Suppression (NMS) to boxes to remove highly overlapping boxes.
 
         Returns:
-            List of contours after NMS
+            List of box indices after NMS
         """
-        if not contours:
+        if len(boxes) == 0:
             return []
 
-        # self.logger.debug(
-        #     f"**nms_contours**, before, num_contours={len(contours)}, iou_threshold={iou_threshold}"
-        # )
         # Calculate bounding boxes and areas for all contours
-        boxes = []
+        boxes_xyxy = []
         areas = []
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            boxes.append([x, y, x + w, y + h])  # Convert to [x1, y1, x2, y2] format
+        for box in boxes:
+            x, y, w, h = box
+            boxes_xyxy.append([x, y, x + w, y + h])  # Convert to [x1, y1, x2, y2] format
             areas.append(w * h)
 
         # Sort contours by area in descending order
@@ -274,11 +262,11 @@ class ZSamWorker:
             rest_indices = indices[1:]
 
             # Calculate IoU between the current contour and all remaining contours
-            current_box = boxes[current]
+            current_box = boxes_xyxy[current]
             ious = []
 
             for idx in rest_indices:
-                box = boxes[idx]
+                box = boxes_xyxy[idx]
 
                 # Calculate intersection
                 x1 = max(current_box[0], box[0])
@@ -300,22 +288,21 @@ class ZSamWorker:
                 ious.append(iou)
 
             # Keep only contours with IoU <= threshold
-            indices = [
-                rest_indices[i] for i, iou in enumerate(ious) if iou <= iou_threshold
-            ]
+            indices = [rest_indices[i] for i, iou in enumerate(ious) if iou <= iou_threshold]
 
         # Return the kept contours
-        # self.logger.debug(
-        #     f"**nms_contours**, after, num_contours={len(keep_indices)}, iou_threshold={iou_threshold}"
-        # )
-        return [contours[i] for i in keep_indices]
+        self.logger.debug(
+            f"**nms_filter**"
+            f"\tbefore: num_boxes={len(boxes)}\n"
+            f"\tafter: num_boxes={len(keep_indices)}\n"
+            f"\tiou_threshold={iou_threshold}"
+        )
+        return keep_indices
 
     def contour_filter(
         self,
         contours: Sequence[cv2t.MatLike],
         min_area_ratio: float = 1.0e-6,
-        apply_nms: bool = True,
-        iou_threshold: float = 0.5,
     ) -> list[cv2t.MatLike]:
         """
         Filter contours by area to remove small contours.
@@ -324,8 +311,6 @@ class ZSamWorker:
         Args:
             contours: List of contours to filter
             min_area_ratio: Minimum area ratio relative to image area (default: 0.001 = 0.1%)
-            apply_nms: Whether to apply NMS to remove overlapping contours (default: True)
-            iou_threshold: IoU threshold for NMS (default: 0.5)
 
         Returns:
             Filtered list of contours
@@ -344,16 +329,10 @@ class ZSamWorker:
 
             # Skip if area is too small
             if area < min_area:
-                self.logger.debug(
-                    f"[filtered] contour area {area}, min_area={min_area}"
-                )
+                self.logger.debug(f"[filtered] contour area {area}, min_area={min_area}")
                 continue
 
             filtered_contours.append(contour)
-
-        # Apply NMS if requested
-        if apply_nms and filtered_contours:
-            filtered_contours = self.nms_contours(filtered_contours, iou_threshold)
 
         return filtered_contours
 
@@ -368,6 +347,20 @@ class ZSamWorker:
         idxs = np.where((areas > area_most * 0.3) & (areas < area_most * 8))[0]
         rects1 = [rects[i] for i in idxs]
         return [Rect(x=x, y=y, w=w, h=h) for x, y, w, h in rects1]
+
+    def results_filter(self, results: list[Rect | Polygon | str]) -> list[Rect | Polygon | str]:
+        bounding_rects = [(r.x, r.y, r.w, r.h) for r in results if isinstance(r, Rect)]
+        for p in results:
+            if not isinstance(p, Polygon):
+                continue
+            contour = np.array([[p.x, p.y] for p in p.points], dtype=np.int32).reshape(-1, 1, 2)
+            x, y, w, h = cv2.boundingRect(contour)
+            bounding_rects.append((x, y, w, h))
+        keep_indices = self.nms_filter(bounding_rects, self.iou_threshold)
+        new_results = [results[i] for i in keep_indices]
+        new_results += [r for r in results if isinstance(r, str)]
+        self.logger.debug(f"Filtering results, num results={len(results)} -> {len(new_results)}")
+        return new_results
 
     def plot(self, rects: list[cv2t.Rect], points: list[Point] | None = None):
         im = copy.deepcopy(self.img)

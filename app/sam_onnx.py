@@ -1,5 +1,6 @@
 import copy
 import hashlib
+from collections import OrderedDict
 
 import cv2
 import numpy as np
@@ -25,13 +26,20 @@ class SamOnnxModel:
         encoder_path: str,
         decoder_path: str,
         cv_interpolation: int = cv2.INTER_LINEAR,
+        img_size: int = 1024,
+        cache_size: int = 241,
+        mean: list[float] | None = None,
+        std: list[float] | None = None,
     ) -> None:
-        self.img_size: int = 1024
-        self.input_size = (1024, 1024)
+        self.img_size: int = img_size
+        self.input_size = (img_size, img_size)
         self.logger = ZLogger("SamOnnxModel")
         self.img = None
-        self._cache: dict[str, SamOnnxEncodedInput] = {}
+        self._cache: OrderedDict[str, SamOnnxEncodedInput] = OrderedDict()
         self.cv_interpolation = cv_interpolation
+        self.cache_size: int = cache_size
+        self.mean = np.array(mean or [123.675, 116.28, 103.53])
+        self.std = np.array(std or [[58.395, 57.12, 57.375]])
 
         # Load models
         providers: list[str] = ort.get_available_providers()
@@ -65,9 +73,7 @@ class SamOnnxModel:
         )
         self.encoder_input_name: str = self.encoder.get_inputs()[0].name
         self.decoder = ort.InferenceSession(decoder_path, providers=providers_decoder)
-        self.decoder_output_names: list[str] = [
-            output.name for output in self.decoder.get_outputs()
-        ]
+        self.decoder_output_names: list[str] = [output.name for output in self.decoder.get_outputs()]
 
     def ensure_image_shape(self, img: NDArray):
         """Ensure image shape is (N, C, H, W)"""
@@ -79,9 +85,31 @@ class SamOnnxModel:
             img = np.expand_dims(img, 0)
         return img
 
+    def preprocess_image(self, image: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
+        h, w, c = image.shape
+        if h > w:
+            nh = self.input_size[0]
+            nw = int(self.input_size[0] / h * w)
+        else:
+            nw = self.input_size[1]
+            nh = int(self.input_size[1] / w * h)
+        new_img = cv2.resize(image, (nw, nh), interpolation=self.cv_interpolation)
+
+        if nh < nw:
+            new_img = np.pad(new_img, ((0, self.input_size[0] - nh), (0, 0), (0, 0)))
+        else:
+            new_img = np.pad(new_img, ((0, 0), (0, self.input_size[1] - nw), (0, 0)))
+
+        new_img = (new_img - self.mean) / self.std
+
+        new_img = np.transpose(new_img, (2, 0, 1))[None, ...]
+        new_img = self.ensure_image_shape(new_img)
+        return new_img, (h, w)
+
     def add_encoded_input(self, key: str, inp: SamOnnxEncodedInput):
-        if key not in self._cache:
-            self._cache[key] = inp
+        if len(self._cache) >= self.cache_size:
+            self._cache.popitem(last=False)
+        self._cache[key] = inp
 
     def key_cached(self, key: str):
         return key in self._cache
@@ -198,32 +226,17 @@ class SamOnnxModel:
         Calculate embedding and metadata for a single image.
         """
         md5 = hashlib.md5(cv_image.tobytes()).hexdigest()
-        res = self._cache.get(md5, None)
+        res = self.get_encoded_input(md5)
         if res is not None:
             return res
 
-        h, w, c = cv_image.shape
-        if h > w:
-            nh = self.input_size[0]
-            nw = int(self.input_size[0] / h * w)
-        else:
-            nw = self.input_size[1]
-            nh = int(self.input_size[1] / w * h)
-        cv_image = cv2.resize(cv_image, (nw, nh), interpolation=self.cv_interpolation)
-
-        if nh < nw:
-            cv_image = np.pad(cv_image, ((0, self.input_size[0] - nh), (0, 0), (0, 0)))
-        else:
-            cv_image = np.pad(cv_image, ((0, 0), (0, self.input_size[1] - nw), (0, 0)))
-
-        mean = np.array([123.675, 116.28, 103.53])
-        std = np.array([[58.395, 57.12, 57.375]])
-        cv_image = (cv_image - mean) / std
-
-        cv_image = np.transpose(cv_image, (2, 0, 1))[None, ...]
-        cv_image = self.ensure_image_shape(cv_image)
+        # N, C, H, W
+        cv_image, (h, w) = self.preprocess_image(cv_image)
+        nh, nw = cv_image.shape[2:]
         res = self.run_encoder(cv_image, (h, w), (nh, nw))
-        self._cache[md5] = res
+
+        self.add_encoded_input(md5, res)
+
         return res
 
     def decode(
@@ -276,9 +289,7 @@ class SamOnnxModel:
         assert isinstance(masks, np.ndarray) and isinstance(scores, np.ndarray)
         # masks: (N, 256, 256)
         # scores: (N,)
-        assert masks.shape[0] == scores.shape[0], (
-            f"masks.shape: {masks.shape}, scores.shape: {scores.shape}"
-        )
+        assert masks.shape[0] == scores.shape[0], f"masks.shape: {masks.shape}, scores.shape: {scores.shape}"
         assert masks.ndim == 3 and scores.ndim == 1, (
             f"masks.shape: {masks.shape}, scores.shape: {scores.shape}"
         )
@@ -304,11 +315,10 @@ class SamOnnxModel:
         self,
         img: NDArray,
         prompts: list[SamOnnxPrompt],
-        return_all_masks: bool = False,
-    ) -> SamOnnxResult | list[SamOnnxResult]:
+    ) -> list[SamOnnxResult]:
         img_encoded = self.encode(cv_image=img)
         results = self.decode(img_encoded, prompts)
-        return results if return_all_masks else results[0]
+        return results
 
 
 class EdgeSam(SamOnnxModel):
@@ -365,42 +375,6 @@ class SAM2(SamOnnxModel):
         )
         return res
 
-    def run_decoder(
-        self,
-        decoder_inputs: dict[str, NDArray],
-        original_size: tuple[int, int],
-        resized_size: tuple[int, int],
-        postprocess: bool = True,
-    ) -> list[SamOnnxResult]:
-        outputs: list[np.ndarray] = self.decoder.run(None, decoder_inputs)  # type: ignore
-        # masks: (B, N, 256, 256)
-        # scores: (B, N)
-        masks, scores = outputs[0], outputs[1]
-        # only use the first result
-        masks, scores = masks[0], scores[0]
-        assert isinstance(masks, np.ndarray) and isinstance(scores, np.ndarray)
-        # masks: (N, 256, 256)
-        # scores: (N,)
-        assert masks.shape[0] == scores.shape[0]
-        assert masks.ndim == 3 and scores.ndim == 1
-
-        results: list[SamOnnxResult] = []
-        for idx in range(len(scores)):
-            results.append(
-                SamOnnxResult(
-                    mask=self.postprocess_mask(
-                        masks[idx],
-                        original_size,
-                        resized_size,
-                    )
-                    if postprocess
-                    else masks[idx],
-                    score=scores[idx],
-                )
-            )
-        sorted_results = sorted(results, key=lambda x: x.score, reverse=True)
-        return sorted_results
-
     def decode(
         self,
         einput: SAM2EncodedInput,
@@ -442,111 +416,151 @@ class SAM2(SamOnnxModel):
 
 class SlimSAM(SamOnnxModel): ...
 
+
 class SAM3(SamOnnxModel):
-    def run_encoder(
+    """SAM3 ONNX Model Implementation"""
+
+    def __init__(
         self,
-        img: NDArray,
-        original_size: tuple[int, int],
-        resized_size: tuple[int, int],
-    ) -> SAM3EncodedInput:
-        """Run encoder"""
-        encoder_inputs = {self.encoder_input_name: img}
-        (
-            fpn_feat_0,
-            fpn_feat_1,
-            fpn_feat_2,
-            fpn_pos_2,
-        ) = self.encoder.run(None, encoder_inputs)  # type: ignore
-        res = SAM3EncodedInput(
-            fpn_feat_0,  # type: ignore
-            original_size=original_size,
-            resized_size=resized_size,
-            fpn_feat_1=fpn_feat_1,  # type: ignore
-            fpn_feat_2=fpn_feat_2,  # type: ignore
-            fpn_pos_2=fpn_pos_2,  # type: ignore
+        encoder_path: str,
+        decoder_path: str,
+        cv_interpolation: int = cv2.INTER_LINEAR,
+        img_size: int = 1008,
+        cache_size: int = 241,
+        mean: list[float] | None = None,
+        std: list[float] | None = None,
+        conf_threshold: float = 0.3,
+        iou_threshold: float = 0.5,
+    ) -> None:
+        super().__init__(
+            encoder_path=encoder_path,
+            decoder_path=decoder_path,
+            cv_interpolation=cv_interpolation,
+            img_size=img_size,
+            cache_size=cache_size,
+            mean=mean,
+            std=std,
         )
-        return res
+        self.conf_threshold = conf_threshold
+        self.iou_threshold = iou_threshold
 
-    def run_decoder(
+    def preprocess_image(self, image: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
+        """Preprocess: resize to target size and normalize"""
+        orig_size = image.shape[:2]  # (h, w)
+
+        # Resize image to target size
+        resized = cv2.resize(image, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
+
+        # Normalize: [0,255] -> [-1,1]
+        normalized = resized.astype(np.float32) / 127.5 - 1.0
+
+        # Convert to NCHW format
+        tensor = normalized.transpose(2, 0, 1)[np.newaxis]
+        return tensor, orig_size
+
+    def xyxy_to_cxcywh_norm(
         self,
-        decoder_inputs: dict[str, NDArray],
-        original_size: tuple[int, int],
-        resized_size: tuple[int, int],
-        postprocess: bool = True,
-    ) -> list[SamOnnxResult]:
-        outputs: list[np.ndarray] = self.decoder.run(None, decoder_inputs)  # type: ignore
-        # masks: (B, N, 256, 256)
-        # scores: (B, N)
-        masks, scores = outputs[0], outputs[1]
-        # only use the first result
-        masks, scores = masks[0], scores[0]
-        assert isinstance(masks, np.ndarray) and isinstance(scores, np.ndarray)
-        # masks: (N, 256, 256)
-        # scores: (N,)
-        assert masks.shape[0] == scores.shape[0]
-        assert masks.ndim == 3 and scores.ndim == 1
+        boxes: list[tuple[float, float, float, float]],
+        img_w: int,
+        img_h: int,
+    ) -> np.ndarray:
+        """Convert xyxy to cxcywh"""
+        # N, 4 => N, (x0, y0, x1, y1)
+        x0, y0, x1, y1 = np.array(boxes, dtype=np.float32).T
+        result = np.stack([(x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0], axis=1)
+        result = result / np.array([img_w, img_h, img_w, img_h])
+        return result
 
-        results: list[SamOnnxResult] = []
-        for idx in range(len(scores)):
-            results.append(
-                SamOnnxResult(
-                    mask=self.postprocess_mask(
-                        masks[idx],
-                        original_size,
-                        resized_size,
-                    )
-                    if postprocess
-                    else masks[idx],
-                    score=scores[idx],
-                )
-            )
-        sorted_results = sorted(results, key=lambda x: x.score, reverse=True)
-        return sorted_results
+    def nms_filter(
+        self,
+        boxes: list[tuple[float, float, float, float]],
+        iou_threshold: float = 0.5,
+    ) -> np.ndarray:
+        """Apply NMS to filter boxes"""
+        # boxes: list[(x1, y1, x2, y2)]
+        if len(boxes) == 0:
+            return np.array([])
+        areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in boxes]
+        # Sort contours by area in descending order
+        indices = np.argsort(areas)[::-1]
+        keep_indices = np.zeros(len(boxes), dtype=bool)
+
+        while len(indices) > 0:
+            # Get the index of the largest remaining contour
+            current = indices[0]
+            keep_indices[current] = True
+
+            if len(indices) == 1:
+                break
+
+            # Get the rest of the indices
+            rest_indices = indices[1:]
+            # Calculate IoU between the current contour and all remaining contours
+            current_box = boxes[current]
+            ious = []
+
+            for idx in rest_indices:
+                box = boxes[idx]
+
+                # Calculate intersection
+                x1 = max(current_box[0], box[0])
+                y1 = max(current_box[1], box[1])
+                x2 = min(current_box[2], box[2])
+                y2 = min(current_box[3], box[3])
+
+                # Calculate intersection area
+                if x2 <= x1 or y2 <= y1:
+                    intersection = 0
+                else:
+                    intersection = (x2 - x1) * (y2 - y1)
+
+                # Calculate union area
+                union = areas[current] + areas[idx] - intersection
+                # Calculate IoU
+                iou = intersection / union if union > 0 else 0
+                ious.append(iou)
+
+            # Keep only contours with IoU <= threshold
+            indices = [rest_indices[i] for i, iou in enumerate(ious) if iou <= iou_threshold]
+
+        return keep_indices
 
     def decode(
         self,
         einput: SAM3EncodedInput,
         prompt: list[SamOnnxPrompt],
     ) -> list[SamOnnxResult]:
-        """Run decoder"""
-        assert einput.image_embedding is not None
+        """Decode features to generate masks"""
+        assert einput.image_embedding is not None  # fpn_feat_0
         assert einput.fpn_feat_1 is not None
         assert einput.fpn_feat_2 is not None
         assert einput.fpn_pos_2 is not None
 
-        # (N, 2), (N,)
-        input_points, input_labels = self.get_input_points(prompt)
-
-        onnx_coord, onnx_label = self.transform_point_labels(
-            input_points,
-            input_labels,
-            einput.original_size,
-            einput.resized_size,
+        boxes_array = (
+            self.xyxy_to_cxcywh_norm(
+                [p.point for p in prompt if len(p.point) == 4],
+                einput.original_size[1],
+                einput.original_size[0],
+            )
+            .astype(np.float32)
+            .reshape(1, -1, 4)
         )
-        onnx_mask_input = np.zeros((1, 1, 256, 256), dtype=np.float32)
-        onnx_has_mask_input = np.zeros(1, dtype=np.float32)
-        
-        # Inputs:
-        #  input_boxes           [batch, num_boxes, 4]     FLOAT
-        #  input_boxes_labels    [batch, num_boxes]        INT64
-        #  fpn_feat_2            [batch, 256, 72, 72]      FLOAT
-        #  fpn_pos_2             [batch, 256, 72, 72]      FLOAT
+        input_boxes_labels = np.array(
+            [p.label for p in prompt if len(p.point) == 4],
+            dtype=np.int64,
+        ).reshape(1, -1)
 
-        # Outputs:
-        #  geometry_features     [batch, num_boxes+1, 256] FLOAT
-        #  geometry_mask         [batch, num_boxes+1]      BOOL
-        # geo_encoder_outputs = 
+        self.logger.info(f"{boxes_array=}, {input_boxes_labels=}")
 
         decoder_inputs = {
-            "fpn_feat_0": einput.image_embedding,
-            "fpn_feat_1": einput.fpn_feat_1,
-            "fpn_feat_2": einput.fpn_feat_2,
-            "fpn_pos_2": einput.fpn_pos_2,
-            "point_coords": onnx_coord,
-            "point_labels": onnx_label,
-            "mask_input": onnx_mask_input,
-            "has_mask_input": onnx_has_mask_input,
+            "fpn_feat_0": einput.image_embedding,  # [batch, 256, 288, 288]    FLOAT
+            "fpn_feat_1": einput.fpn_feat_1,  # [batch, 256, 144, 144]    FLOAT
+            "fpn_feat_2": einput.fpn_feat_2,  # [batch, 256, 72, 72]      FLOAT
+            "fpn_pos_2": einput.fpn_pos_2,  # [batch, 256, 72, 72]      FLOAT
+            "input_boxes": boxes_array,  # [batch, num_boxes, 4]     FLOAT
+            "input_boxes_labels": input_boxes_labels,  # [batch, num_boxes]        INT64
         }
+
         results = self.run_decoder(
             decoder_inputs,
             einput.original_size,
@@ -554,3 +568,83 @@ class SAM3(SamOnnxModel):
         )
 
         return results
+
+    def run_encoder(
+        self,
+        img: NDArray,
+        original_size: tuple[int, int],
+        resized_size: tuple[int, int],
+    ) -> SAM3EncodedInput:
+        outputs = self.encoder.run(None, {"images": img})
+        return SAM3EncodedInput(
+            image_embedding=outputs[0],  # fpn_feat_0 [B, 256, 288, 288] # type: ignore
+            original_size=original_size,
+            resized_size=resized_size,
+            fpn_feat_1=outputs[1],  # fpn_feat_1 [B, 256, 144, 144] # type: ignore
+            fpn_feat_2=outputs[2],  # fpn_feat_2 [B, 256, 72, 72] # type: ignore
+            fpn_pos_2=outputs[3],  # fpn_pos_2 [B, 256, 72, 72] # type: ignore
+        )
+
+    def run_decoder(
+        self,
+        decoder_inputs: dict[str, np.ndarray],
+        original_size: tuple[int, int],
+        resized_size: tuple[int, int],
+        postprocess: bool = True,
+    ) -> list[SamOnnxResult]:
+        # pred_masks, pred_boxes, pred_logits, presence_logits
+        # Outputs:
+        #     pred_masks            [batch, 200, 288, 288]    FLOAT
+        #     pred_boxes            [batch, 200, 4]           FLOAT
+        #     pred_logits           [batch, 200]              FLOAT
+        #     presence_logits       [batch, 1]                FLOAT
+        outputs: list[np.ndarray] = self.decoder.run(None, decoder_inputs)  # type: ignore
+        assert len(outputs) == 4
+
+        self.logger.info(f"{outputs[0].shape=}, {outputs[2].shape=}, {outputs[3].shape=}")
+
+        masks, boxes, pred_logits, presence_logits = (
+            outputs[0][0],
+            outputs[1][0],
+            outputs[2][0],
+            outputs[3][0, 0],
+        )
+
+        presence_score = 1 / (1 + np.exp(-presence_logits))
+        scores = (1 / (1 + np.exp(-pred_logits))) * presence_score
+        keep = scores > self.conf_threshold
+
+        self.logger.debug(f"{scores=}")
+
+        h, w = original_size
+        masks = masks[keep]
+        boxes = boxes[keep]
+        scores = scores[keep]
+
+        # Apply NMS
+        keep = self.nms_filter(boxes, self.iou_threshold)
+        masks = masks[keep]
+        boxes = boxes[keep]
+        scores = scores[keep]
+
+        self.logger.info(f"{scores.shape=}")
+        boxes[:, [0, 2]] *= w
+        boxes[:, [1, 3]] *= h
+        boxes = np.clip(boxes, 0, [[w, h, w, h]])
+
+        # Resize masks: 288x288 -> original size
+        results: list[SamOnnxResult] = []
+        for i, mask in enumerate(masks):
+            mask_resized = cv2.resize(mask, (w, h), interpolation=self.cv_interpolation)
+            mask_binary = mask_resized > 0
+            results.append(
+                SamOnnxResult(
+                    mask=mask_binary.astype(np.float32),
+                    score=scores[i],
+                    box=(boxes[i][0], boxes[i][1], boxes[i][2], boxes[i][3]),
+                )
+            )
+
+        # Sort by score
+        sorted_results = sorted(results, key=lambda x: x.score, reverse=True)
+        return sorted_results

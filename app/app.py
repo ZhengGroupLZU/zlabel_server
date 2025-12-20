@@ -26,7 +26,7 @@ import app.db as db
 from app.config import SETTINGS
 from app.logger import ZLogger
 from app.openlist_api import OpenListAPIError, OpenListClient
-from app.sam_onnx import SAM2, EdgeSam, SamOnnxModel, SlimSAM
+from app.sam_onnx import SAM2, SAM3, EdgeSam, SamOnnxModel, SlimSAM
 from app.worker import AutoMode, ReturnType, ZSamWorker
 from app.ztypes import Annotation, Point, Rect, SamReturn, annotation_checker
 
@@ -37,13 +37,35 @@ logger = ZLogger("ZLabelServer")
 
 SAM_MODEL: SamOnnxModel
 if SETTINGS.model_name == "SAM":
-    SAM_MODEL = SamOnnxModel(SETTINGS.encoder_path, SETTINGS.decoder_path)
+    SAM_MODEL = SamOnnxModel(
+        SETTINGS.encoder_path,
+        SETTINGS.decoder_path,
+        cache_size=SETTINGS.image_cache_size,
+    )
 elif SETTINGS.model_name == "EdgeSAM":
-    SAM_MODEL = EdgeSam(SETTINGS.encoder_path, SETTINGS.decoder_path)
+    SAM_MODEL = EdgeSam(
+        SETTINGS.encoder_path,
+        SETTINGS.decoder_path,
+        cache_size=SETTINGS.image_cache_size,
+    )
 elif SETTINGS.model_name == "SAM2":
-    SAM_MODEL = SAM2(SETTINGS.encoder_path, SETTINGS.decoder_path)
+    SAM_MODEL = SAM2(
+        SETTINGS.encoder_path,
+        SETTINGS.decoder_path,
+        cache_size=SETTINGS.image_cache_size,
+    )
 elif SETTINGS.model_name == "SlimSAM":
-    SAM_MODEL = SlimSAM(SETTINGS.encoder_path, SETTINGS.decoder_path)
+    SAM_MODEL = SlimSAM(
+        SETTINGS.encoder_path,
+        SETTINGS.decoder_path,
+        cache_size=SETTINGS.image_cache_size,
+    )
+elif SETTINGS.model_name == "SAM3":
+    SAM_MODEL = SAM3(
+        SETTINGS.encoder_path,
+        SETTINGS.decoder_path,
+        cache_size=SETTINGS.image_cache_size,
+    )
 else:
     raise ValueError(f"Unknown model name: {SETTINGS.model_name}")
 
@@ -280,9 +302,7 @@ async def get_zlabel(name: str, authorization: str = Header(None)):
     def get_zlabel_func():
         oplist_client.set_token(authorization)
 
-        file_bytes = oplist_client.fs.get_file_bytes(
-            f"{SETTINGS.oplist_zlabel_save_dir}/{name}"
-        )
+        file_bytes = oplist_client.fs.get_file_bytes(f"{SETTINGS.oplist_zlabel_save_dir}/{name}")
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content=json.loads(file_bytes.decode("utf-8")),
@@ -310,9 +330,7 @@ async def refresh_tasks(username: str = Query(...), password: str = Query(...)):
 
     projects = oplist_client.fs.dirs(SETTINGS.oplist_proj_dir)
     for project in projects.data:
-        img_files = oplist_client.fs.glob(
-            f"{SETTINGS.oplist_proj_dir}/{project.name}", "*"
-        )
+        img_files = oplist_client.fs.glob(f"{SETTINGS.oplist_proj_dir}/{project.name}", "*")
         # logger.debug(img_files)
         img_files_filtered = []
         for img_file in img_files:

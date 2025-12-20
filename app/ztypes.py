@@ -112,6 +112,7 @@ def annotation_checker(data: str = Form(...)):
 class SamOnnxResult:
     mask: NDArray[np.float32]
     score: float
+    box: tuple[float, float, float, float] | None = None
 
 
 class PromptType(Enum):
