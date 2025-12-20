@@ -85,26 +85,12 @@ class SamOnnxModel:
             img = np.expand_dims(img, 0)
         return img
 
-    def preprocess_image(self, image: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
-        h, w, c = image.shape
-        if h > w:
-            nh = self.input_size[0]
-            nw = int(self.input_size[0] / h * w)
-        else:
-            nw = self.input_size[1]
-            nh = int(self.input_size[1] / w * h)
-        new_img = cv2.resize(image, (nw, nh), interpolation=self.cv_interpolation)
-
-        if nh < nw:
-            new_img = np.pad(new_img, ((0, self.input_size[0] - nh), (0, 0), (0, 0)))
-        else:
-            new_img = np.pad(new_img, ((0, 0), (0, self.input_size[1] - nw), (0, 0)))
-
+    def preprocess_image(self, image: np.ndarray) -> np.ndarray:
+        new_img = cv2.resize(image, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
         new_img = (new_img - self.mean) / self.std
-
         new_img = np.transpose(new_img, (2, 0, 1))[None, ...]
         new_img = self.ensure_image_shape(new_img)
-        return new_img, (h, w)
+        return new_img
 
     def add_encoded_input(self, key: str, inp: SamOnnxEncodedInput):
         if len(self._cache) >= self.cache_size:
@@ -231,9 +217,10 @@ class SamOnnxModel:
             return res
 
         # N, C, H, W
-        cv_image, (h, w) = self.preprocess_image(cv_image)
-        nh, nw = cv_image.shape[2:]
-        res = self.run_encoder(cv_image, (h, w), (nh, nw))
+        h, w = cv_image.shape[:2]
+        new_img = self.preprocess_image(cv_image)
+        nh, nw = new_img.shape[2:]
+        res = self.run_encoder(new_img, (h, w), (nh, nw))
 
         self.add_encoded_input(md5, res)
 
@@ -444,10 +431,8 @@ class SAM3(SamOnnxModel):
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
 
-    def preprocess_image(self, image: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
+    def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """Preprocess: resize to target size and normalize"""
-        orig_size = image.shape[:2]  # (h, w)
-
         # Resize image to target size
         resized = cv2.resize(image, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
 
@@ -456,7 +441,7 @@ class SAM3(SamOnnxModel):
 
         # Convert to NCHW format
         tensor = normalized.transpose(2, 0, 1)[np.newaxis]
-        return tensor, orig_size
+        return tensor
 
     def xyxy_to_cxcywh_norm(
         self,
