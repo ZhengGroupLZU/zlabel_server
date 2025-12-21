@@ -16,6 +16,7 @@ data/
 *.bak
 python-install
 models/
+*.pt
 
 tasks_json.json
 

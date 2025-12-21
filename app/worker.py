@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from rich import print  # noqa: F401
 
 from app.logger import ZLogger
-from app.sam_onnx import SamOnnxModel
+from app.sam import ZSAM
 from app.ztypes import (
     AutoMode,
     Point,
@@ -23,7 +23,7 @@ from app.ztypes import (
 class ZSamWorker:
     def __init__(
         self,
-        model: SamOnnxModel,
+        model: ZSAM,
         anno_id: str,
         img: NDArray,
         auto_mode: AutoMode = AutoMode.CV,
@@ -155,7 +155,18 @@ class ZSamWorker:
     ) -> list[SamOnnxResult]:
         if len(prompts) == 0:
             return [SamOnnxResult(np.array([[]]), 0.0)]
-        out = self.model.predict(img, prompts)
+        boxes = [p.point for p in prompts if len(p.point) == 4]
+        boxes_labels = [int(p.label) for p in prompts if len(p.point) == 4]
+        points = [p.point for p in prompts if len(p.point) == 2]
+        points_labels = [int(p.label) for p in prompts if len(p.point) == 2]
+        labels = boxes_labels if len(boxes) > 0 else points_labels
+
+        out = self.model.predict(
+            img,
+            bboxes=boxes,
+            labels=labels,
+            points=points,
+        )
         return out
 
     def postprocess_mask(

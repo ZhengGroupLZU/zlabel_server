@@ -26,7 +26,7 @@ import app.db as db
 from app.config import SETTINGS
 from app.logger import ZLogger
 from app.openlist_api import OpenListAPIError, OpenListClient
-from app.sam_onnx import SAM2, SAM3, EdgeSam, SamOnnxModel, SlimSAM
+from app.sam import ZSAM, ZSAM2, ZSAM3
 from app.worker import AutoMode, ReturnType, ZSamWorker
 from app.ztypes import Annotation, Point, Rect, SamReturn, annotation_checker
 
@@ -35,35 +35,26 @@ app = FastAPI()
 
 logger = ZLogger("ZLabelServer")
 
-SAM_MODEL: SamOnnxModel
-if SETTINGS.model_name == "SAM":
-    SAM_MODEL = SamOnnxModel(
-        SETTINGS.encoder_path,
-        SETTINGS.decoder_path,
-        cache_size=SETTINGS.image_cache_size,
-    )
-elif SETTINGS.model_name == "EdgeSAM":
-    SAM_MODEL = EdgeSam(
-        SETTINGS.encoder_path,
-        SETTINGS.decoder_path,
+SAM_MODEL: ZSAM
+if SETTINGS.model_name in ("SAM", "MobileSAM"):
+    SAM_MODEL = ZSAM(
+        model_path=SETTINGS.model_path,
+        minor_model_name=SETTINGS.minor_model_name,
+        minor_model_path=SETTINGS.minor_model_path,
         cache_size=SETTINGS.image_cache_size,
     )
 elif SETTINGS.model_name == "SAM2":
-    SAM_MODEL = SAM2(
-        SETTINGS.encoder_path,
-        SETTINGS.decoder_path,
-        cache_size=SETTINGS.image_cache_size,
-    )
-elif SETTINGS.model_name == "SlimSAM":
-    SAM_MODEL = SlimSAM(
-        SETTINGS.encoder_path,
-        SETTINGS.decoder_path,
+    SAM_MODEL = ZSAM2(
+        model_path=SETTINGS.model_path,
+        minor_model_name=SETTINGS.minor_model_name,
+        minor_model_path=SETTINGS.minor_model_path,
         cache_size=SETTINGS.image_cache_size,
     )
 elif SETTINGS.model_name == "SAM3":
-    SAM_MODEL = SAM3(
-        SETTINGS.encoder_path,
-        SETTINGS.decoder_path,
+    SAM_MODEL = ZSAM3(
+        model_path=SETTINGS.model_path,
+        minor_model_name=SETTINGS.minor_model_name,
+        minor_model_path=SETTINGS.minor_model_path,
         cache_size=SETTINGS.image_cache_size,
     )
 else:
@@ -430,7 +421,7 @@ async def how_many_finished():
 async def set_image(image: UploadFile = File(...)):
     content = await image.read()
     img = Image.open(BytesIO(content))
-    SAM_MODEL.encode(np.asarray(img, dtype=np.uint8))
+    SAM_MODEL.set_image(np.asarray(img, dtype=np.uint8))
     return JSONResponse(
         content={"message": "success", "data": None},
         status_code=status.HTTP_200_OK,
@@ -481,7 +472,7 @@ async def _set_model_image(img: bytes) -> None:
     loop = asyncio.get_event_loop()
     loop.run_in_executor(
         None,
-        SAM_MODEL.encode,
+        SAM_MODEL.set_image,
         np.asarray(Image.open(BytesIO(img)), dtype=np.uint8),
     )
 

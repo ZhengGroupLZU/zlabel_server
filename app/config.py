@@ -8,9 +8,13 @@ class Settings(BaseSettings):
     version: str = "1.0.0"
 
     database_url: str = "./zlabel_server.db"
-    model_name: Literal["SAM", "EdgeSAM", "SAM2", "SlimSAM", "SAM3"] = "SlimSAM"
-    encoder_path: str = ""
-    decoder_path: str = ""
+    # large model for batch rectangle inference
+    model_name: Literal["SAM", "MobileSAM", "SAM2", "SAM3"] = "SAM3"
+    model_path: str = ""
+    # small minor model for point inference
+    # only used for SAM3, which has not point input
+    minor_model_name: Literal["SAM", "MobileSAM", "SAM2", "SAM3"] = "MobileSAM"
+    minor_model_path: str = ""
 
     oplist_host: str = "http://127.0.0.1:5244"
     oplist_username: str = ""

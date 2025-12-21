@@ -5,21 +5,26 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "clip",
     "fastapi-users>=15.0.1",
     "fastapi[standard]>=0.115.12",
     "numpy>=2.2.5",
-    "onnxruntime-gpu>=1.22.0",
     "opencv-python-headless>=4.11.0.86",
     "pillow>=11.2.1",
     "pydantic-settings>=2.11.0",
     "requests>=2.32.3",
     "rich>=14.0.0",
     "sqlalchemy>=2.0.43",
+    "timm>=1.0.22",
+    "ultralytics>=8.3.240",
 ]
 
 [[tool.uv.index]]
 name = "tsinghua"
 url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+
+[tool.uv.sources]
+clip = { git = "https://gh-proxy.com/https://github.com/ultralytics/CLIP.git" }
 
 [tool.uv]
 python-install-mirror = "https://gh-proxy.com/https://github.com/astral-sh/python-build-standalone/releases/download"
