@@ -32,6 +32,9 @@ class ZSamWorker:
         min_contour_area_ratio: float = 3.0e-5,
         apply_nms: bool = True,
         iou_threshold: float = 0.5,
+        contour_min_points: int = 5,
+        contour_max_points: int = 100,
+        contour_max_iterations: int = 10,
     ) -> None:
         """
         For point:
@@ -53,6 +56,9 @@ class ZSamWorker:
         self.min_contour_area_ratio = min_contour_area_ratio
         self.apply_nms = apply_nms
         self.iou_threshold = iou_threshold
+        self.contour_min_points = contour_min_points
+        self.contour_max_points = contour_max_points
+        self.contour_max_iterations = contour_max_iterations
         self.shifts = [0, 0, 0, 0]
         self.logger = ZLogger("ZSamWorker")
 
@@ -74,8 +80,6 @@ class ZSamWorker:
                             r.mask.astype(np.uint8),
                             merge_one=True,
                             min_contour_area_ratio=self.min_contour_area_ratio,
-                            apply_nms=self.apply_nms,
-                            iou_threshold=self.iou_threshold,
                         )
                     )
 
@@ -85,8 +89,6 @@ class ZSamWorker:
                 return self.postprocess_mask(
                     self.img,
                     min_contour_area_ratio=self.min_contour_area_ratio,
-                    apply_nms=self.apply_nms,
-                    iou_threshold=self.iou_threshold,
                 )
             # whole image by SAM
             case x if x == AutoMode.SAM | AutoMode.CV:
@@ -107,8 +109,6 @@ class ZSamWorker:
                             self.postprocess_mask(
                                 r.mask.astype(np.uint8),
                                 min_contour_area_ratio=self.min_contour_area_ratio,
-                                apply_nms=self.apply_nms,
-                                iou_threshold=self.iou_threshold,
                             )
                         )
             case AutoMode.CV:
@@ -117,8 +117,6 @@ class ZSamWorker:
                         self.img,
                         roi=rect,
                         min_contour_area_ratio=self.min_contour_area_ratio,
-                        apply_nms=self.apply_nms,
-                        iou_threshold=self.iou_threshold,
                     )
                     results.extend(r)
             case x if x == AutoMode.SAM & AutoMode.CV:
@@ -128,8 +126,6 @@ class ZSamWorker:
                         roi=rect,
                         return_type=ReturnType.RECT,
                         min_contour_area_ratio=self.min_contour_area_ratio,
-                        apply_nms=self.apply_nms,
-                        iou_threshold=self.iou_threshold,
                     )  # type: ignore
                     centers = [Point(x=rect.x + r.x + r.w / 2, y=rect.y + r.y + r.h / 2) for r in rects0]
                     tmp = [SamOnnxPrompt.new(pp, 1) for pp in centers]
@@ -139,8 +135,6 @@ class ZSamWorker:
                             self.postprocess_mask(
                                 r.mask.astype(np.uint8),
                                 min_contour_area_ratio=self.min_contour_area_ratio,
-                                apply_nms=self.apply_nms,
-                                iou_threshold=self.iou_threshold,
                             )
                         )
             case _:
@@ -176,8 +170,6 @@ class ZSamWorker:
         roi: Rect | None = None,
         return_type: ReturnType | None = None,
         min_contour_area_ratio: float = 1.0e-6,
-        apply_nms: bool = True,
-        iou_threshold: float = 0.5,
     ) -> Sequence[Rect | Polygon | str]:
         return_type = return_type or self.return_type
         # return RLE-encoded mask
@@ -206,7 +198,17 @@ class ZSamWorker:
             contours,
             min_area_ratio=min_contour_area_ratio,
         )
+
         # contours = [cv2.approxPolyDP(c, 3, True) for c in contours]
+        contours = [
+            self.reduce_contour_points(
+                c,
+                min_points=self.contour_min_points,
+                max_points=self.contour_max_points,
+                max_iterations=self.contour_max_iterations,
+            )
+            for c in contours
+        ]
 
         # return rectangles
         if return_type == ReturnType.RECT:
@@ -232,6 +234,40 @@ class ZSamWorker:
             return polygons
         else:
             raise NotImplementedError
+
+    def reduce_contour_points(
+        self,
+        contour: np.ndarray,
+        target_reduction: float = 0.7,
+        min_points: int = 5,
+        max_points: int = 100,
+        max_iterations: int = 10,
+    ):
+        # 使用二分查找找到合适的epsilon
+        low, high = 0.1, 10.0
+        best_simplified = None
+        target_points = max(min_points, int(len(contour) * (1 - target_reduction)))
+        target_points = min(target_points, max_points)
+
+        for _ in range(max_iterations):  # 最多迭代10次
+            epsilon = (low + high) / 2
+            simplified = cv2.approxPolyDP(contour, epsilon, closed=True)
+
+            if len(simplified) == target_points:
+                best_simplified = simplified
+                break
+            elif len(simplified) < target_points:
+                high = epsilon  # epsilon太大，减少点数
+            else:
+                low = epsilon  # epsilon太小，增加点数
+
+            if high - low < 0.1:  # 收敛条件
+                best_simplified = simplified
+                break
+
+        if best_simplified is None:
+            best_simplified = cv2.approxPolyDP(contour, 1.0, closed=True)
+        return best_simplified.reshape(-1, 2)
 
     def nms_filter(
         self,

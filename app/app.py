@@ -500,6 +500,9 @@ def _predict(
                 threshold=threshold,
                 return_type=return_type,
                 min_contour_area_ratio=SETTINGS.min_contour_area_ratio,
+                contour_min_points=SETTINGS.contour_min_points,
+                contour_max_points=SETTINGS.contour_max_points,
+                contour_max_iterations=SETTINGS.contour_max_iterations,
             )
             worker_result = worker.run_point(p, l)
             status = True
@@ -513,6 +516,9 @@ def _predict(
                 threshold=threshold,
                 return_type=return_type,
                 min_contour_area_ratio=SETTINGS.min_contour_area_ratio,
+                contour_min_points=SETTINGS.contour_min_points,
+                contour_max_points=SETTINGS.contour_max_points,
+                contour_max_iterations=SETTINGS.contour_max_iterations,
             )
             worker_result = worker.run_rect(r)
             status = True

@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     minor_model_name: Literal["SAM", "MobileSAM", "SAM2", "SAM3"] = "MobileSAM"
     minor_model_path: str = ""
 
+    contour_min_points: int = 10
+    contour_max_points: int = 100
+    contour_max_iterations: int = 10
+
     oplist_host: str = "http://127.0.0.1:5244"
     oplist_username: str = ""
     oplist_password: str = ""
