@@ -8,13 +8,16 @@ class Settings(BaseSettings):
     version: str = "1.0.0"
 
     database_url: str = "./zlabel_server.db"
-    # large model for batch rectangle inference
-    model_name: Literal["SAM", "MobileSAM", "SAM2", "SAM3"] = "SAM3"
-    model_path: str = ""
-    # small minor model for point inference
-    # only used for SAM3, which has not point input
-    minor_model_name: Literal["SAM", "MobileSAM", "SAM2", "SAM3"] = "MobileSAM"
-    minor_model_path: str = ""
+    # segmentation model used for inference
+    model_name: Literal["SAM", "SlimSAM", "EdgeSAM", "SAM2", "SAM3"] = "EdgeSAM"
+    # directory containing the ONNX model files (assets/onnx)
+    model_dir: str = "assets/onnx"
+    # ONNXRuntime execution provider: CPU / CUDA (falls back to CPU if unavailable)
+    ort_backend: Literal["CPU", "CUDA"] = "CPU"
+    ort_threads: int = 8
+    # SAM3 PCS detection thresholds
+    sam3_conf: float = 0.25
+    sam3_iou: float = 0.7
 
     contour_min_points: int = 10
     contour_max_points: int = 100

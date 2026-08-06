@@ -8,15 +8,7 @@ from typing import Any
 
 import requests
 
-from .exceptions import (
-    AuthenticationError,
-    AuthorizationError,
-    NetworkError,
-    NotFoundError,
-    OpenListAPIError,
-    ServerError,
-    ValidationError,
-)
+from .exceptions import OpenListAPIError
 
 
 class BaseClient:

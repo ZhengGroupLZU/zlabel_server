@@ -96,6 +96,7 @@ class Annotation(BaseModel):
     points: list[Point] | None = None
     labels: list[float] | None = None
     rects: list[Rect] | None = None
+    texts: list[str] | None = None
 
 
 def annotation_checker(data: str = Form(...)):
@@ -113,6 +114,15 @@ class SamOnnxResult:
     mask: NDArray[np.float32]
     score: float
     box: tuple[float, float, float, float] | None = None
+
+
+@dataclass
+class PvsResult:
+    """Interactive (points/box) single-object result, SAM3 PVS path."""
+
+    mask: NDArray[np.uint8]  # (H, W) binary in original image space
+    score: float
+    box: NDArray[np.float32]  # (4,) xyxy in original pixel coords
 
 
 class PromptType(Enum):

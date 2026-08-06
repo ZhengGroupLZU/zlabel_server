@@ -26,7 +26,7 @@ import app.db as db
 from app.config import SETTINGS
 from app.logger import ZLogger
 from app.openlist_api import OpenListAPIError, OpenListClient
-from app.sam import ZSAM, ZSAM2, ZSAM3
+from app.sam_ort import Predictor
 from app.worker import AutoMode, ReturnType, ZSamWorker
 from app.ztypes import Annotation, Point, Rect, SamReturn, annotation_checker
 
@@ -35,30 +35,14 @@ app = FastAPI()
 
 logger = ZLogger("ZLabelServer")
 
-SAM_MODEL: ZSAM
-if SETTINGS.model_name in ("SAM", "MobileSAM"):
-    SAM_MODEL = ZSAM(
-        model_path=SETTINGS.model_path,
-        minor_model_name=SETTINGS.minor_model_name,
-        minor_model_path=SETTINGS.minor_model_path,
-        cache_size=SETTINGS.image_cache_size,
-    )
-elif SETTINGS.model_name == "SAM2":
-    SAM_MODEL = ZSAM2(
-        model_path=SETTINGS.model_path,
-        minor_model_name=SETTINGS.minor_model_name,
-        minor_model_path=SETTINGS.minor_model_path,
-        cache_size=SETTINGS.image_cache_size,
-    )
-elif SETTINGS.model_name == "SAM3":
-    SAM_MODEL = ZSAM3(
-        model_path=SETTINGS.model_path,
-        minor_model_name=SETTINGS.minor_model_name,
-        minor_model_path=SETTINGS.minor_model_path,
-        cache_size=SETTINGS.image_cache_size,
-    )
-else:
-    raise ValueError(f"Unknown model name: {SETTINGS.model_name}")
+SAM_MODEL = Predictor(
+    model_dir=SETTINGS.model_dir,
+    model_name=SETTINGS.model_name,
+    backend=SETTINGS.ort_backend,
+    threads=SETTINGS.ort_threads,
+    conf=SETTINGS.sam3_conf,
+    iou=SETTINGS.sam3_iou,
+)
 
 
 IMAGE_CACHE = OrderedDict()
@@ -418,10 +402,11 @@ async def how_many_finished():
 
 
 @app.post("/api/v1/set_image")
-async def set_image(image: UploadFile = File(...)):
+async def set_image(image: UploadFile = File(...), image_name: str = Form("")):
     content = await image.read()
-    img = Image.open(BytesIO(content))
-    SAM_MODEL.set_image(np.asarray(img, dtype=np.uint8))
+    if image_name:
+        await _cache_image(image_name, content)
+    await _set_model_image(content)
     return JSONResponse(
         content={"message": "success", "data": None},
         status_code=status.HTTP_200_OK,
@@ -432,29 +417,35 @@ async def set_image(image: UploadFile = File(...)):
 @app.post("/api/v1/predict")
 async def predict_v1(
     anno: Annotation = Depends(annotation_checker),
+    image: UploadFile | None = File(None),
     threshold: int = Form(100),
     mode: int = Form(1),
     image_name: str = Form(...),
     authorization: str = Header(None),
     return_type: int = Form(1),  # RECT = 1 POLYGON = 2 RLE = 3
 ):
-    resp = await get_image(image_name, authorization)
-    if resp.status_code != 200:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=resp.body,
-            media_type="application/json",
-        )
+    if image is not None:
+        # direct image upload: cache the bytes (so get_image returns them) and
+        # set the model image; no oplist round-trip needed
+        content = await image.read()
+        await _cache_image(image_name, content)
+        await _set_model_image(content)
+    else:
+        resp = await get_image(image_name, authorization)
+        if resp.status_code != 200:
+            return resp
+        content = resp.body
 
     @oplist_client_try_run
     def predict_func():
-        img = Image.open(BytesIO(resp.body))
+        img = Image.open(BytesIO(content))
         result = _predict(
             anno.id,
             img,
             anno.points,
             anno.labels,
             anno.rects,
+            anno.texts,
             threshold,
             AutoMode(mode),
             ReturnType(return_type),
@@ -473,8 +464,13 @@ async def _set_model_image(img: bytes) -> None:
     loop.run_in_executor(
         None,
         SAM_MODEL.set_image,
-        np.asarray(Image.open(BytesIO(img)), dtype=np.uint8),
+        _to_bgr(np.asarray(Image.open(BytesIO(img)), dtype=np.uint8)),
     )
+
+
+def _to_bgr(img: np.ndarray) -> np.ndarray:
+    """Convert an RGB array (PIL convention) to BGR (OpenCV convention)."""
+    return img[..., ::-1].copy()
 
 
 def _predict(
@@ -483,6 +479,7 @@ def _predict(
     points: list[Point] | None,
     labels: list[float] | None,
     rects: list[Rect] | None,
+    texts: list[str] | None,
     threshold: int,
     auto_mode: AutoMode,
     return_type: ReturnType,
@@ -490,12 +487,29 @@ def _predict(
     status = False
     msg = ""
     worker_result = None
-    match (points, labels, rects):
-        case (p, l, r) if p is not None and l is not None and len(p) == len(l):
+    img_bgr = _to_bgr(np.asarray(img, dtype=np.uint8))
+    match (points, labels, rects, texts):
+        case (_, _, _, t) if t is not None:
             worker = ZSamWorker(
                 model=SAM_MODEL,
                 anno_id=anno_id,
-                img=np.asarray(img, dtype=np.uint8),
+                img=img_bgr,
+                auto_mode=auto_mode,
+                threshold=threshold,
+                return_type=return_type,
+                min_contour_area_ratio=SETTINGS.min_contour_area_ratio,
+                contour_min_points=SETTINGS.contour_min_points,
+                contour_max_points=SETTINGS.contour_max_points,
+                contour_max_iterations=SETTINGS.contour_max_iterations,
+            )
+            worker_result = worker.run_text(t)
+            status = True
+            msg = "success"
+        case (p, l, r, _) if p is not None and l is not None and len(p) == len(l):
+            worker = ZSamWorker(
+                model=SAM_MODEL,
+                anno_id=anno_id,
+                img=img_bgr,
                 auto_mode=auto_mode,
                 threshold=threshold,
                 return_type=return_type,
@@ -507,11 +521,11 @@ def _predict(
             worker_result = worker.run_point(p, l)
             status = True
             msg = "success"
-        case (p, l, r) if r is not None:
+        case (p, l, r, _) if r is not None:
             worker = ZSamWorker(
                 model=SAM_MODEL,
                 anno_id=anno_id,
-                img=np.asarray(img, dtype=np.uint8),
+                img=img_bgr,
                 auto_mode=auto_mode,
                 threshold=threshold,
                 return_type=return_type,

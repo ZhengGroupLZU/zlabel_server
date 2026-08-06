@@ -1,4 +1,5 @@
 .vscode
+references/
 
 # Python-generated files
 __pycache__/
@@ -9,6 +10,8 @@ wheels/
 *.egg-info
 notebooks/
 *.onnx
+*.mnn
+*.whl
 *.db
 .env
 *.png
