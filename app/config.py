@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ZLSERVER_",
-        env_file=".env",
+        env_file=".env.onnx",
         env_file_encoding="utf-8",
     )
 

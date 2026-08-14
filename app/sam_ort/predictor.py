@@ -26,21 +26,6 @@ MODEL_FILES: dict[str, tuple[str, str]] = {
     "SAM2": ("sam2_hiera_large.encoder.onnx", "sam2_hiera_large.decoder.onnx"),
 }
 
-#: models where CUDA is measurably faster and stable (fp32 graphs)
-CUDA_FAST_MODELS = {"SAM", "SAM2", "SAM3"}
-
-
-def _effective_backend(model_name: str, backend: str) -> str:
-    """CUDA for the models that benefit from it.
-
-    SlimSAM's fp16 encoder triggers an intermittent onnxruntime CUDA
-    (SimplifiedLayerNormFusion / InsertedPrecisionFreeCast) crash and shows no
-    speedup; EdgeSAM is too small to benefit. Both stay on CPU.
-    """
-    if backend == "CUDA" and model_name not in CUDA_FAST_MODELS:
-        return "CPU"
-    return backend
-
 
 def build_runner(
     model_dir: str | Path,
@@ -51,7 +36,6 @@ def build_runner(
     iou: float = 0.7,
 ):
     d = Path(model_dir)
-    backend = _effective_backend(model_name, backend)
     if model_name == "SAM3":
         return Sam3Runner(d, conf=conf, iou=iou, backend=backend, threads=threads)
     enc, dec = MODEL_FILES.get(model_name, MODEL_FILES["EdgeSAM"])
