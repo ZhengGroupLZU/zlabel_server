@@ -12,6 +12,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from app import debug_save
+
 SAM_MEAN = np.array([123.675, 116.28, 103.53], np.float32)
 SAM_STD = np.array([[58.395, 57.12, 57.375]], np.float32)
 
@@ -25,7 +27,9 @@ def preprocess_sam(image_bgr: np.ndarray, img_size: int = 1024) -> np.ndarray:
 
     Returns (1,3,img_size,img_size) fp32.
     """
+    h, w = image_bgr.shape[:2]
     im = cv2.resize(image_bgr, (img_size, img_size), interpolation=cv2.INTER_LINEAR)
+    debug_save.save_image("02_pre_sam", im, prompt_scale=(img_size / w, img_size / h))
     im = _to_rgb(im)
     im = im.astype(np.float32)
     im = (im - SAM_MEAN) / SAM_STD
@@ -44,6 +48,7 @@ def preprocess_sam_letterbox(image_bgr: np.ndarray, img_size: int = 1024) -> tup
     im = cv2.resize(image_bgr, new_unpad, interpolation=cv2.INTER_LINEAR)
     dw, dh = img_size - new_unpad[0], img_size - new_unpad[1]
     im = cv2.copyMakeBorder(im, 0, round(dh + 0.1), 0, round(dw + 0.1), cv2.BORDER_CONSTANT, value=(114,) * 3)
+    debug_save.save_image("02_pre_letterbox", im, prompt_scale=(r, r))
     im = _to_rgb(im)
     im = im.astype(np.float32)
     im = (im - SAM_MEAN) / SAM_STD
@@ -64,6 +69,11 @@ def preprocess_sam3(image_bgr: np.ndarray, target: int = 1008, pad: bool = False
         im = cv2.copyMakeBorder(im, 0, round(dh + 0.1), 0, round(dw + 0.1), cv2.BORDER_CONSTANT, value=(114,) * 3)
     else:
         im = cv2.resize(image_bgr, (target, target), interpolation=cv2.INTER_LINEAR)
+    if pad:
+        scale = (r, r)
+    else:
+        scale = (target / w, target / h)
+    debug_save.save_image(f"02_pre_sam3_{'pvs' if pad else 'pcs'}", im, prompt_scale=scale)
     im = _to_rgb(im)
     im = im.astype(np.float32)
     im = (im - 127.5) / 127.5

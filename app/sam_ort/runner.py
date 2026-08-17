@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
+from app import debug_save
 from app.sam_ort.backends import OrtSession
 from app.sam_ort.postprocess import (
     pcs_filter_nms,
@@ -104,9 +105,15 @@ class _SamDecoderMixin:
         out = decoder.run(feeds)
         masks = out["masks"][0]  # (N, 1024, 1024) for SAM/SlimSAM, (N, 256, 256) for EdgeSAM
         scores = out.get("scores", out.get("iou_predictions"))[0]  # (N,)
+        raw_scale = (self._ratio, self._ratio) if self._letterbox else (
+            masks[0].shape[1] / self._orig_shape[1],
+            masks[0].shape[0] / self._orig_shape[0],
+        )
+        debug_save.save_image("03_raw_mask", masks[0], prompt_scale=raw_scale)
         results = []
         for mask, score in zip(masks, scores):
             up = self._upscale(mask)
+            debug_save.save_image("04_final_mask", up)
             results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(score)))
         return sorted(results, key=lambda r: r.score, reverse=True)
 
@@ -116,12 +123,15 @@ class _SamDecoderMixin:
         return upscale_mask(mask, self._orig_shape)
 
     def segment_points(self, points, labels) -> list[SamOnnxResult]:
+        debug_save.set_prompt(points=points, labels=labels)
         coord, lbl = self._transform_points(points, labels)
         return self._run_decoder(coord, lbl)
 
     def segment_box(self, box_xyxy_px) -> list[SamOnnxResult]:
+        debug_save.set_prompt(boxes=[box_xyxy_px])
         pts, lbs = _box_to_points(box_xyxy_px)
-        return self.segment_points(pts, lbs)
+        coord, lbl = self._transform_points(pts, lbs)
+        return self._run_decoder(coord, lbl)
 
 
 class SamRunner(_SamDecoderMixin):
@@ -137,6 +147,8 @@ class SamRunner(_SamDecoderMixin):
         self._image_embeddings: np.ndarray | None = None
 
     def set_image(self, image_bgr: np.ndarray):
+        debug_save.set_prompt()
+        debug_save.save_image("01_recv", image_bgr)
         self._orig_shape = image_bgr.shape[:2]
         in_name = self._encoder.input_names[0]
         if self._letterbox:
@@ -161,6 +173,8 @@ class Sam2Runner(_SamDecoderMixin):
         self._hr1: np.ndarray | None = None
 
     def set_image(self, image_bgr: np.ndarray):
+        debug_save.set_prompt()
+        debug_save.save_image("01_recv", image_bgr)
         self._orig_shape = image_bgr.shape[:2]
         tensor, self._ratio = preprocess_sam_letterbox(image_bgr, self._img_size)
         out = self._encoder.run({"image": tensor})
@@ -189,9 +203,11 @@ class Sam2Runner(_SamDecoderMixin):
         out = decoder.run(feeds)
         masks = out["masks"][0]  # (N, 256, 256)
         scores = out["iou_predictions"][0]
+        debug_save.save_image("03_raw_mask", masks[0], prompt_scale=(self._ratio, self._ratio))
         results = []
         for mask, score in zip(masks, scores):
             up = self._upscale(mask)
+            debug_save.save_image("04_final_mask", up)
             results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(score)))
         return sorted(results, key=lambda r: r.score, reverse=True)
 
@@ -231,6 +247,8 @@ class Sam3Runner:
         self._pvs_feats: dict | None = None
 
     def set_image(self, image_bgr: np.ndarray):
+        debug_save.set_prompt()
+        debug_save.save_image("01_recv", image_bgr)
         self._img = image_bgr
         self._orig_shape = image_bgr.shape[:2]
         self._pcs_feats = None
@@ -269,9 +287,11 @@ class Sam3Runner:
         points = [tuple(float(v) for v in p) for p in points]
         if labels is None:
             labels = [1] * len(points)
+        debug_save.set_prompt(points=points, labels=labels)
         return self._pvs(points, [int(v) for v in labels])
 
     def segment_box(self, box_xyxy_px) -> PvsResult:
+        debug_save.set_prompt(boxes=[box_xyxy_px])
         pts, lbs = _box_to_points(box_xyxy_px)
         return self._pvs(pts, [int(v) for v in lbs])
 
@@ -298,6 +318,10 @@ class Sam3Runner:
             }
         )
         mask = upscale_mask_pad(out["masks"][0, 0], (H, W))
+        raw = out["masks"][0, 0]
+        raw_scale = (raw.shape[1] * r / SAM3_IMG, raw.shape[0] * r / SAM3_IMG)
+        debug_save.save_image("03_raw_mask", raw, prompt_scale=raw_scale)
+        debug_save.save_image("04_final_mask", mask)
         ys, xs = np.nonzero(mask)
         box = np.zeros((4,), np.float32)
         if len(xs) > 0:
@@ -308,6 +332,7 @@ class Sam3Runner:
     def segment_text(self, texts, bboxes_xyxy_px=None) -> list[SamOnnxResult]:
         if isinstance(texts, str):
             texts = [texts]
+        debug_save.set_prompt(boxes=bboxes_xyxy_px)
         geo_feats, geo_masks = self._geometry(bboxes_xyxy_px)
         all_results: list[SamOnnxResult] = []
         for text in texts:
@@ -330,6 +355,8 @@ class Sam3Runner:
             H, W = self._orig_shape
             for m, b, s in zip(masks, boxes_n, sc):
                 up = upscale_mask(m, (H, W))
+                debug_save.save_image("03_raw_mask", m, prompt_scale=(m.shape[1] / W, m.shape[0] / H))
+                debug_save.save_image("04_final_mask", up)
                 box_px = (b[0] * W, b[1] * H, b[2] * W, b[3] * H)
                 all_results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(s), box=tuple(box_px)))
         return all_results
