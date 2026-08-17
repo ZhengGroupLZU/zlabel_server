@@ -19,7 +19,8 @@ pytestmark = pytest.mark.slow
 # point/box locations on the test image (720x1280)
 PERSON_POINT = [(400, 300)]
 PERSON_BOX = [(400, 200, 800, 700)]
-SAM3_POINT = [(635, 271)]  # maps to the verified (500, 380) in 1008-space
+SAM3_POINT = [(635, 271)]  # PVS uses letterbox scaling (min-ratio 1008/1280=0.7875)
+# original stretch mapping was (500, 380) in 1008-space; letterbox maps to (500, 213)
 
 
 def _predict(img_bgr, name, points=None, bboxes=None, text=None, conf=None, iou=None):

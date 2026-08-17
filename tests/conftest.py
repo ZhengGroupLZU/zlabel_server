@@ -10,7 +10,7 @@ import pytest
 
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 MODEL_DIR = ASSETS_DIR / "onnx"
-TEST_IMAGE = Path(__file__).resolve().parent.parent / "notebooks" / "assets" / "zidane.jpg"
+TEST_IMAGE = Path(__file__).resolve().parent / "data" / "zidane.jpg"
 IMG_SIZE = (720, 1280)  # zidane.jpg
 
 

@@ -1,4 +1,4 @@
-"""Preprocessing tests: letterbox math must match ultralytics LetterBox."""
+"""Preprocessing tests: SAM-family stretch, SlimSAM/SAM2 letterbox math, SAM3 dual path."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from app.sam_ort.preprocess import preprocess_sam3, preprocess_sam_letterbox
+from app.sam_ort.preprocess import preprocess_sam, preprocess_sam3, preprocess_sam_letterbox
 
 SAM_MEAN = np.array([123.675, 116.28, 103.53], np.float32)
 SAM_STD = np.array([[58.395, 57.12, 57.375]], np.float32)
@@ -22,6 +22,18 @@ def reference_letterbox(img: np.ndarray, new_shape: tuple[int, int]) -> tuple[np
     dw, dh = dst_w - new_unpad[0], dst_h - new_unpad[1]
     im = cv2.copyMakeBorder(im, 0, round(dh + 0.1), 0, round(dw + 0.1), cv2.BORDER_CONSTANT, value=(114,) * 3)
     return im, r
+
+
+class TestPreprocessSam:
+    def test_stretch_shape_and_norm(self, img_bgr):
+        tensor = preprocess_sam(img_bgr, 1024)
+        assert tensor.shape == (1, 3, 1024, 1024)
+        assert tensor.dtype == np.float32
+        # stretched: content spans the full tensor, no padding
+        expected = cv2.resize(img_bgr, (1024, 1024), interpolation=cv2.INTER_LINEAR)
+        expected = expected[..., ::-1].astype(np.float32)
+        expected = ((expected - SAM_MEAN) / SAM_STD).transpose(2, 0, 1)[None]
+        np.testing.assert_allclose(tensor, expected, atol=1e-5)
 
 
 class TestPreprocessSamLetterbox:
@@ -76,3 +88,12 @@ class TestPreprocessSam3:
         expected = cv2.resize(img_bgr, (1008, 1008)).astype(np.float32)
         expected = expected[..., ::-1] / 127.5 - 1.0
         np.testing.assert_allclose(tensor[0].transpose(1, 2, 0), expected, atol=1e-5)
+
+    def test_pad_letterbox(self, img_bgr):
+        tensor = preprocess_sam3(img_bgr, 1008, pad=True)
+        assert tensor.shape == (1, 3, 1008, 1008)
+        # 1280x720 -> min-ratio 1008/1280=0.7875, content 1008x567, pad bottom 441
+        ref, r = reference_letterbox(img_bgr, (1008, 1008))
+        ref_norm = ref[..., ::-1].astype(np.float32) / 127.5 - 1.0
+        ref_norm = ref_norm.transpose(2, 0, 1)[None]
+        np.testing.assert_allclose(tensor, ref_norm, atol=1e-5)

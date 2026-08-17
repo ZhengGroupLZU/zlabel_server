@@ -41,6 +41,8 @@ def build_runner(
     enc, dec = MODEL_FILES.get(model_name, MODEL_FILES["EdgeSAM"])
     if model_name == "SAM2":
         return Sam2Runner(d / enc, d / dec, backend=backend, threads=threads)
+    if model_name == "SlimSAM":
+        return SamRunner(d / enc, d / dec, letterbox=True, backend=backend, threads=threads)
     return SamRunner(d / enc, d / dec, backend=backend, threads=threads)
 
 
@@ -119,16 +121,13 @@ class Predictor:
         if iou is not None:
             self._runner.iou = iou
 
-        if text is not None or bboxes:
+        if text is not None:
             if not hasattr(self._runner, "segment_text"):
-                if text is not None:
-                    raise ValueError("text prompts require the SAM3 model")
-                return self._run_points_boxes(points, labels, bboxes)
+                raise ValueError("text prompts require the SAM3 model")
             texts = [text] if isinstance(text, str) else text
-            texts = texts or ["visual"]
             return list(self._runner.segment_text(texts, bboxes))
 
-        if points is None:
+        if points is None and bboxes is None:
             raise ValueError("provide at least one of points=, bboxes= or text=")
         return self._run_points_boxes(points, labels, bboxes)
 

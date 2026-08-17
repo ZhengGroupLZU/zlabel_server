@@ -59,8 +59,9 @@ class TestRunRect:
     def test_sam_mode(self):
         model = MaskPredictor([(100, 100, 500, 500), (600, 100, 900, 500)])
         results = make_worker(model).run_rect([Rect(x=100, y=100, w=400, h=400)])
-        # one box prompt -> the fake returns 2 candidate masks -> 2 rects
-        assert len(results) == 2
+        # one box prompt -> the fake returns 2 candidate masks, only the
+        # highest-scoring one is post-processed -> 1 rect
+        assert len(results) == 1
         assert model.calls[0][2] == [(100, 100, 500, 500)]
 
     def test_cv_mode_roi(self):

@@ -9,7 +9,12 @@ from rich import print  # noqa: F401
 
 from app.logger import ZLogger
 from app.sam_ort import Predictor
-from app.sam_ort.postprocess import contour_filter, nms_filter, reduce_contour_points
+from app.sam_ort.postprocess import (
+    contour_filter,
+    nms_filter,
+    reduce_contour_points,
+    smooth_contour,
+)
 from app.ztypes import (
     AutoMode,
     Point,
@@ -91,10 +96,12 @@ class ZSamWorker:
                 # regard multiple points as single point
                 pts = [(p.x, p.y) for p in points]
                 results = self.run_sam(points=pts, labels=labels)
-                for r in results:
+                # SAM returns several candidate masks per point; keep only the
+                # highest-scoring one to avoid near-identical overlays.
+                if results:
                     final_results.extend(
                         self.postprocess_mask(
-                            r.mask.astype(np.uint8),
+                            results[0].mask.astype(np.uint8),
                             merge_one=True,
                             min_contour_area_ratio=self.min_contour_area_ratio,
                         )
@@ -120,10 +127,13 @@ class ZSamWorker:
             case AutoMode.SAM:
                 for rect in rects:
                     box = (rect.x, rect.y, rect.x + rect.w, rect.y + rect.h)
-                    for r in self.run_sam(bboxes=[box]):
+                    # SAM returns several candidate masks per box; keep only the
+                    # highest-scoring one to avoid drawing near-identical overlays.
+                    candidates = self.run_sam(bboxes=[box])
+                    if candidates:
                         results.extend(
                             self.postprocess_mask(
-                                r.mask.astype(np.uint8),
+                                candidates[0].mask.astype(np.uint8),
                                 min_contour_area_ratio=self.min_contour_area_ratio,
                             )
                         )
@@ -180,9 +190,11 @@ class ZSamWorker:
             offset_x, offset_y = x, y
         # cv2.imwrite("mask.png", _mask)
         _mask = cv2.dilate(_mask, np.ones((3, 3), np.uint8), iterations=1)
-        _mask = cv2.blur(_mask, (2, 2))
+        # Gaussian blur + re-threshold rounds the binary edge (vs the tiny 2x2 box
+        # blur), which removes most of the mask stair-stepping.
+        _mask = cv2.GaussianBlur(_mask, (3, 3), 0)
         # cv2.imwrite("mask_blur.png", _mask)
-        _mask = cv2.erode(_mask, np.ones((3, 3), np.uint8), iterations=2)
+        _mask = cv2.erode(_mask, np.ones((3, 3), np.uint8), iterations=1)
         contours, _ = cv2.findContours(
             _mask,
             cv2.RETR_EXTERNAL,
@@ -196,6 +208,8 @@ class ZSamWorker:
         )
 
         # contours = [cv2.approxPolyDP(c, 3, True) for c in contours]
+        # smooth the contour points, then drop redundant points for a cleaner shape
+        contours = [smooth_contour(c) for c in contours]
         contours = [
             reduce_contour_points(
                 c,

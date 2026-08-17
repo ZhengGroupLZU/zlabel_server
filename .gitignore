@@ -16,6 +16,7 @@ notebooks/
 .env
 *.png
 data/
+!tests/data/
 *.bak
 python-install
 models/

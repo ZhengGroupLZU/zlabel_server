@@ -12,6 +12,7 @@ from app.sam_ort.postprocess import (
     pcs_filter_nms,
     pcs_scores,
     reduce_contour_points,
+    smooth_contour,
     upscale_mask,
     upscale_mask_pad,
     xywh2xyxy,
@@ -143,3 +144,19 @@ class TestContourHelpers:
         contour = np.stack([200 * np.cos(angles), 200 * np.sin(angles)], axis=1).astype(np.int32).reshape(-1, 1, 2)
         simplified = reduce_contour_points(contour, min_points=5, max_points=100)
         assert 4 <= len(simplified) <= 100
+
+    def test_smooth_contour(self):
+        # a jagged square outline; smoothing keeps the same layout and count
+        contour = np.array([[0, 0], [0, 4], [0, 8], [4, 8], [8, 8], [8, 4], [8, 0], [4, 0]], np.int32).reshape(-1, 1, 2)
+        smoothed = smooth_contour(contour, window=3)
+        assert smoothed.shape == contour.shape
+        assert smoothed.dtype == np.int32
+        # results stay inside the original bounding box
+        assert smoothed.min() >= 0 and smoothed.max() <= 8
+        # a point on a straight edge is averaged over its neighbors (no NaN drift)
+        assert np.isfinite(smoothed).all()
+
+    def test_smooth_contour_small_contour_unchanged(self):
+        contour = np.array([[0, 0], [1, 1], [2, 0]], np.int32).reshape(-1, 1, 2)
+        smoothed = smooth_contour(contour, window=5)  # window > n -> identity
+        np.testing.assert_array_equal(smoothed, contour)

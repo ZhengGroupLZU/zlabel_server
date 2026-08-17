@@ -4,21 +4,32 @@ from __future__ import annotations
 
 import pytest
 
-from app.sam_ort.predictor import CUDA_FAST_MODELS, Predictor, _effective_backend
+from app.sam_ort.backends import build_providers
+from app.sam_ort.predictor import Predictor
 
 
-class TestEffectiveBackend:
-    @pytest.mark.parametrize("name", ["SlimSAM", "EdgeSAM"])
-    def test_cuda_requested_but_forced_cpu(self, name):
-        assert _effective_backend(name, "CUDA") == "CPU"
+def _provider_names(backend: str) -> list[str]:
+    providers, _ = build_providers(backend, 4)
+    return [p if isinstance(p, str) else p[0] for p in providers]
 
-    @pytest.mark.parametrize("name", sorted(CUDA_FAST_MODELS))
-    def test_cuda_fast_models(self, name):
-        assert _effective_backend(name, "CUDA") == "CUDA"
+
+class TestBackendPolicy:
+    """The per-model CUDA policy was removed; build_providers uses CUDA for any
+    model when requested and falls back to CPU when CUDA is unavailable."""
+
+    def test_cpu_requested(self):
+        assert _provider_names("CPU") == ["CPUExecutionProvider"]
+
+    def test_cuda_includes_cpu_fallback(self):
+        names = _provider_names("CUDA")
+        assert "CPUExecutionProvider" in names
 
     @pytest.mark.parametrize("name", ["SAM", "SlimSAM", "EdgeSAM", "SAM2", "SAM3"])
-    def test_cpu_always_cpu(self, name):
-        assert _effective_backend(name, "CPU") == "CPU"
+    def test_backend_independent_of_model(self, name):
+        # requested backend drives provider selection, not the model name
+        p = Predictor(model_dir="assets/onnx", model_name=name, backend="CPU", threads=2)
+        assert p.backend == "CPU"
+        assert p.model_name == name
 
 
 class TestPredictorRouting:
@@ -42,15 +53,17 @@ class TestPredictorRouting:
         with pytest.raises(ValueError, match="text prompts require the SAM3 model"):
             p.predict(text=["person"])
 
-    def test_sam3_text_defaults_to_visual(self):
+    def test_sam3_bbox_routes_to_segment_box(self):
+        # bbox-only prompts go to the interactive PVS path (segment_box), not text
         p = self.make("SAM3")
         p.predict(bboxes=[(1, 2, 3, 4)])
-        assert p._runner.calls[0][0] == "segment_text"
-        assert p._runner.calls[0][1] == ["visual"]
+        assert p._runner.calls[0][0] == "segment_box"
+        assert p._runner.calls[0][1] == [1.0, 2.0, 3.0, 4.0]
 
     def test_sam3_text_passthrough(self):
         p = self.make("SAM3")
         p.predict(text=["person"])
+        assert p._runner.calls[0][0] == "segment_text"
         assert p._runner.calls[0][1] == ["person"]
 
     def test_sam3_text_str_single(self):

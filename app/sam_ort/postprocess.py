@@ -92,7 +92,7 @@ def upscale_mask_pad(mask_logits: np.ndarray, target_hw: tuple[int, int], mask_t
     gain = min(m.shape[0] / H, m.shape[1] / W)
     pad_w = m.shape[1] - round(W * gain)
     pad_h = m.shape[0] - round(H * gain)
-    crop = m[: m.shape[0] - round(pad_h + 0.1), : m.shape[1] - round(pad_w + 0.1)]
+    crop = m[: m.shape[0] - pad_h, : m.shape[1] - pad_w]
     if crop.shape[0] > 0 and crop.shape[1] > 0:
         m = cv2.resize(crop, (W, H), interpolation=cv2.INTER_LINEAR)
     else:
@@ -134,6 +134,24 @@ def reduce_contour_points(
     if best is None:
         best = cv2.approxPolyDP(contour, 1.0, closed=True)
     return best.reshape(-1, 2)
+
+
+def smooth_contour(contour: np.ndarray, window: int = 5) -> np.ndarray:
+    """Moving-average smooth of a closed contour to reduce pixel-stair-step jaggies.
+
+    ``window`` is the averaging window size (odd). Returns the same layout as the
+    input contour (N,1,2) int32.
+    """
+    pts = contour.reshape(-1, 2).astype(np.float32)
+    n = len(pts)
+    if n < window:
+        return contour
+    half = window // 2
+    out = np.empty_like(pts)
+    for i in range(n):
+        idxs = [(i + j) % n for j in range(-half, half + 1)]
+        out[i] = np.mean(pts[idxs], axis=0)
+    return out.reshape(-1, 1, 2).astype(np.int32)
 
 
 def nms_filter(boxes: list[tuple[float, float, float, float]], iou_threshold: float = 0.5) -> list[int]:

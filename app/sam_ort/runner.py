@@ -1,14 +1,15 @@
 """Model runners: unified set_image + segment_points/segment_box (and SAM3 text) over ONNXRuntime.
 
-- SamRunner: SAM / EdgeSAM / SlimSAM (encoder -> decoder), letterboxed input
+- SamRunner: SAM / EdgeSAM (stretched input) and SlimSAM (letterboxed input)
 - Sam2Runner: SAM2 (encoder -> decoder), letterboxed input
-- Sam3Runner: SAM3 (vision_encoder + pvs for interactive, text/geometry/detector for PCS), stretched input
+- Sam3Runner: SAM3 (vision_encoder + pvs for interactive, text/geometry/detector for PCS)
 
-Preprocessing follows the Ultralytics SAM pipeline:
-- SAM-family: ``LetterBox(imgsz, auto=False, center=False)`` (min-ratio scale, 114 pad right/bottom),
-  prompts scaled by the same ratio, masks un-padded (crop) and resized back to the original image.
-- SAM3: ``LetterBox(imgsz, ..., scale_fill=True)`` (direct stretch), prompts per-axis,
+Preprocessing mirrors the ZLabel desktop pipeline:
+- SAM / EdgeSAM: direct stretch to the square encoder input, prompts scaled per-axis,
   masks resized directly back to the original image.
+- SlimSAM / SAM2: ``LetterBox(imgsz, auto=False, center=False)`` (min-ratio scale, 114 pad
+  right/bottom), prompts scaled by the same ratio, masks un-padded (crop) and resized back.
+- SAM3: stretch for PCS, letterbox for PVS (separately cached vision features).
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from app.sam_ort.postprocess import (
     upscale_mask,
     upscale_mask_pad,
 )
-from app.sam_ort.preprocess import preprocess_sam3, preprocess_sam_letterbox
+from app.sam_ort.preprocess import preprocess_sam, preprocess_sam3, preprocess_sam_letterbox
 from app.sam_ort.tokenize import SimpleTokenizer
 from app.ztypes import PvsResult, SamOnnxResult
 
@@ -34,7 +35,6 @@ SAM3_HW = 72 * 72
 SAM3_CTX = 32
 SAM3_GEO_MAX_BOXES = 4
 SAM3_PVS_MAX_POINTS = 4
-SAM3_FALLBACK_TEXT = "visual"
 
 
 def _box_to_points(box_xyxy_px) -> tuple[list[tuple[float, float]], list[float]]:
@@ -45,7 +45,8 @@ def _box_to_points(box_xyxy_px) -> tuple[list[tuple[float, float]], list[float]]
 class _SamDecoderMixin:
     """Shared prompt->decoder logic for SAM-family (encoder -> image_embeddings -> decoder)."""
 
-    def __init__(self, img_size: int = SAM_IMG, backend: str = "CPU", threads: int = 4):
+    def __init__(self, letterbox: bool = False, img_size: int = SAM_IMG, backend: str = "CPU", threads: int = 4):
+        self._letterbox = letterbox
         self._img_size = img_size
         self._backend = backend
         self._threads = threads
@@ -53,7 +54,7 @@ class _SamDecoderMixin:
         self._orig_shape: tuple[int, int] | None = None
 
     def _transform_points(self, points, labels):
-        """Scale pixel coords into the encoder input space (letterbox min-ratio)."""
+        """Scale pixel coords into the encoder input space."""
         pts = np.asarray(points, np.float32)
         lbs = np.asarray(labels, np.float32)
         if (lbs == 2).sum() == 0:
@@ -63,7 +64,12 @@ class _SamDecoderMixin:
             onnx_coord = pts[None]
             onnx_label = lbs[None].astype(np.float32)
         onnx_coord = onnx_coord.copy()
-        onnx_coord *= self._ratio
+        if self._letterbox:
+            onnx_coord *= self._ratio
+        else:
+            h, w = self._orig_shape
+            onnx_coord[..., 0] *= self._img_size / w
+            onnx_coord[..., 1] *= self._img_size / h
         return onnx_coord, onnx_label
 
     def _new_decoder(self) -> OrtSession:
@@ -86,9 +92,13 @@ class _SamDecoderMixin:
             elif name == "has_mask_input":
                 feeds[name] = np.zeros((1,), np.float32)
             elif name == "orig_im_size":
-                # SAM/SlimSAM decoders resize masks to orig_im_size; use the letterboxed
-                # size and crop the padding back to the original image afterwards
-                feeds[name] = np.array([self._img_size, self._img_size], np.float32)
+                # SAM/SlimSAM decoders resize masks to orig_im_size. For letterboxed
+                # input feed the padded size and crop the padding back afterwards
+                # (upscale_mask_pad); for stretched input feed the original size so the
+                # decoder resizes directly (upscale_mask then becomes a no-op).
+                feeds[name] = np.array(
+                    self._orig_shape if not self._letterbox else [self._img_size, self._img_size], np.float32
+                )
             else:
                 raise ValueError(f"unexpected SAM decoder input: {name}")
         out = decoder.run(feeds)
@@ -96,9 +106,14 @@ class _SamDecoderMixin:
         scores = out.get("scores", out.get("iou_predictions"))[0]  # (N,)
         results = []
         for mask, score in zip(masks, scores):
-            up = upscale_mask_pad(mask, self._orig_shape)
+            up = self._upscale(mask)
             results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(score)))
         return sorted(results, key=lambda r: r.score, reverse=True)
+
+    def _upscale(self, mask: np.ndarray) -> np.ndarray:
+        if self._letterbox:
+            return upscale_mask_pad(mask, self._orig_shape)
+        return upscale_mask(mask, self._orig_shape)
 
     def segment_points(self, points, labels) -> list[SamOnnxResult]:
         coord, lbl = self._transform_points(points, labels)
@@ -113,8 +128,8 @@ class SamRunner(_SamDecoderMixin):
     """SAM / EdgeSAM / SlimSAM: encoder -> image_embeddings -> decoder."""
 
     def __init__(self, encoder_path: str | Path, decoder_path: str | Path, img_size: int = SAM_IMG,
-                 backend: str = "CPU", threads: int = 4):
-        super().__init__(img_size=img_size, backend=backend, threads=threads)
+                 letterbox: bool = False, backend: str = "CPU", threads: int = 4):
+        super().__init__(letterbox=letterbox, img_size=img_size, backend=backend, threads=threads)
         self._encoder_path = str(encoder_path)
         self._decoder_path = str(decoder_path)
         self._encoder = OrtSession(self._encoder_path, backend=backend, threads=threads)
@@ -123,8 +138,11 @@ class SamRunner(_SamDecoderMixin):
 
     def set_image(self, image_bgr: np.ndarray):
         self._orig_shape = image_bgr.shape[:2]
-        tensor, self._ratio = preprocess_sam_letterbox(image_bgr, self._img_size)
         in_name = self._encoder.input_names[0]
+        if self._letterbox:
+            tensor, self._ratio = preprocess_sam_letterbox(image_bgr, self._img_size)
+        else:
+            tensor = preprocess_sam(image_bgr, self._img_size)
         self._image_embeddings = self._encoder.run({in_name: tensor})["image_embeddings"]
 
 
@@ -133,7 +151,7 @@ class Sam2Runner(_SamDecoderMixin):
 
     def __init__(self, encoder_path: str | Path, decoder_path: str | Path, img_size: int = SAM_IMG,
                  backend: str = "CPU", threads: int = 4):
-        super().__init__(img_size=img_size, backend=backend, threads=threads)
+        super().__init__(letterbox=True, img_size=img_size, backend=backend, threads=threads)
         self._encoder_path = str(encoder_path)
         self._decoder_path = str(decoder_path)
         self._encoder = OrtSession(self._encoder_path, backend=backend, threads=threads)
@@ -173,7 +191,7 @@ class Sam2Runner(_SamDecoderMixin):
         scores = out["iou_predictions"][0]
         results = []
         for mask, score in zip(masks, scores):
-            up = upscale_mask_pad(mask, self._orig_shape)
+            up = self._upscale(mask)
             results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(score)))
         return sorted(results, key=lambda r: r.score, reverse=True)
 
@@ -209,12 +227,14 @@ class Sam3Runner:
         if (d / "vocab.json").exists() and (d / "merges.txt").exists():
             self._tokenizer = SimpleTokenizer.default(d)
         self._orig_shape: tuple[int, int] | None = None
-        self._feats: dict | None = None
+        self._pcs_feats: dict | None = None
+        self._pvs_feats: dict | None = None
 
     def set_image(self, image_bgr: np.ndarray):
         self._img = image_bgr
         self._orig_shape = image_bgr.shape[:2]
-        self._feats = None
+        self._pcs_feats = None
+        self._pvs_feats = None
 
     def _run_vision(self, im: np.ndarray) -> dict:
         # transient session: created per encode and released afterwards so its CUDA
@@ -234,10 +254,15 @@ class Sam3Runner:
             "img_pos": pos2.transpose(0, 2, 3, 1).reshape(SAM3_HW, 256)[:, None, :],
         }
 
-    def _ensure_feats(self) -> dict:
-        if self._feats is None:
-            self._feats = self._run_vision(preprocess_sam3(self._img))
-        return self._feats
+    def _ensure_pcs(self) -> dict:
+        if self._pcs_feats is None:
+            self._pcs_feats = self._run_vision(preprocess_sam3(self._img, pad=False))
+        return self._pcs_feats
+
+    def _ensure_pvs(self) -> dict:
+        if self._pvs_feats is None:
+            self._pvs_feats = self._run_vision(preprocess_sam3(self._img, pad=True))
+        return self._pvs_feats
 
     # ------------------------------------------------------------------ interactive
     def segment_points(self, points, labels=None) -> PvsResult:
@@ -252,10 +277,9 @@ class Sam3Runner:
 
     def _pvs(self, points_px, labels) -> PvsResult:
         H, W = self._orig_shape
-        f = self._ensure_feats()
-        pts = np.asarray(points_px, np.float32).copy()
-        pts[:, 0] *= SAM3_IMG / W
-        pts[:, 1] *= SAM3_IMG / H
+        f = self._ensure_pvs()
+        r = min(SAM3_IMG / H, SAM3_IMG / W)
+        pts = np.asarray(points_px, np.float32) * r
         labels = np.asarray(labels, np.int64)
         pad_coords = np.zeros((1, SAM3_PVS_MAX_POINTS, 2), np.float32)
         pad_labels = -np.ones((1, SAM3_PVS_MAX_POINTS), np.int64)
@@ -273,7 +297,7 @@ class Sam3Runner:
                 "mask_present": np.zeros((1,), np.int64),
             }
         )
-        mask = upscale_mask(out["masks"][0, 0], (H, W))
+        mask = upscale_mask_pad(out["masks"][0, 0], (H, W))
         ys, xs = np.nonzero(mask)
         box = np.zeros((4,), np.float32)
         if len(xs) > 0:
@@ -288,7 +312,7 @@ class Sam3Runner:
         all_results: list[SamOnnxResult] = []
         for text in texts:
             tf, tm = self._encode_text(text)
-            f = self._ensure_feats()
+            f = self._ensure_pcs()
             pred = self._detector_model.run(
                 {
                     "fpn0": f["fpn0"],
@@ -318,7 +342,7 @@ class Sam3Runner:
         return out["text_features"], out["text_mask"]
 
     def _geometry(self, bboxes_xyxy_px):
-        f = self._ensure_feats()
+        f = self._ensure_pcs()
         H, W = self._orig_shape
         if not bboxes_xyxy_px:
             geo_feats = np.zeros((SAM3_GEO_MAX_BOXES + 1, 1, 256), np.float32)
