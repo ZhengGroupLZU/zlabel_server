@@ -7,6 +7,8 @@ upload, the get_image bytes-serialization regression, and prompt routing.
 from __future__ import annotations
 
 import importlib
+import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -155,3 +157,79 @@ class TestPredict:
         r = self._predict(client, '{"id":"x1"}', image_bytes=img_bytes)
         assert r.status_code == 200
         assert r.json()["data"]["status"] is False
+
+
+class TestSaveZLabel:
+    def _save(self, client, data: dict):
+        zlabel = json.dumps({"id": "anno1", "slots": []}).encode("utf-8")
+        # filename=None -> sent as a bytes form field (matches `zlabel: bytes = Form`)
+        files = {"zlabel": (None, zlabel, "application/json")}
+        return client.put("/api/v1/save_zlabel", files=files, data=data)
+
+    def test_uses_project_dir(self, client, appmod, monkeypatch):
+        captured = {}
+
+        def fake_upload(file_path, file_data, as_task=True):  # noqa: ARG001
+            captured["path"] = file_path
+            return SimpleNamespace(code=200, message="success")
+
+        monkeypatch.setattr(appmod.oplist_client.fs, "stream_upload", fake_upload)
+        monkeypatch.setattr(appmod.db, "insert_link_table", lambda *a, **k: None)
+        r = self._save(client, {"username": "alice", "filename": "label.json", "project": "projX"})
+        assert r.status_code == 200
+        assert captured["path"] == f"{appmod.SETTINGS.oplist_proj_dir}/projX/zlabel/label.json"
+
+    def test_defaults_to_config_project(self, client, appmod, monkeypatch):
+        captured = {}
+
+        def fake_upload(file_path, file_data, as_task=True):  # noqa: ARG001
+            captured["path"] = file_path
+            return SimpleNamespace(code=200, message="success")
+
+        monkeypatch.setattr(appmod.oplist_client.fs, "stream_upload", fake_upload)
+        monkeypatch.setattr(appmod.db, "insert_link_table", lambda *a, **k: None)
+        # no ``project`` provided -> falls back to configured oplist_proj_name
+        r = self._save(client, {"username": "alice", "filename": "label.json"})
+        assert r.status_code == 200
+        assert captured["path"] == (
+            f"{appmod.SETTINGS.oplist_proj_dir}/{appmod.SETTINGS.oplist_proj_name}/zlabel/label.json"
+        )
+
+    def test_upload_failure_propagates(self, client, appmod, monkeypatch):
+        def boom(*_args, **_kwargs):  # noqa: ARG001
+            return SimpleNamespace(code=500, message="push error")
+
+        monkeypatch.setattr(appmod.oplist_client.fs, "stream_upload", boom)
+        monkeypatch.setattr(appmod.db, "insert_link_table", lambda *a, **k: None)
+        r = self._save(client, {"username": "alice", "filename": "label.json", "project": "projX"})
+        assert r.status_code == 200
+        assert r.json()["message"] == "push error"
+
+
+class TestGetZLabel:
+    def test_uses_project_dir(self, client, appmod, monkeypatch):
+        captured = {}
+
+        def fake_get(path):
+            captured["path"] = path
+            return b'{"id":"anno1","slots":[]}'
+
+        monkeypatch.setattr(appmod.oplist_client.fs, "get_file_bytes", fake_get)
+        r = client.get("/api/v1/get_zlabel", params={"name": "label.json", "project": "projX"})
+        assert r.status_code == 200
+        assert captured["path"] == f"{appmod.SETTINGS.oplist_proj_dir}/projX/zlabel/label.json"
+        assert r.json() == {"id": "anno1", "slots": []}
+
+    def test_defaults_to_config_project(self, client, appmod, monkeypatch):
+        captured = {}
+
+        def fake_get(path):
+            captured["path"] = path
+            return b'{"id":"anno1"}'
+
+        monkeypatch.setattr(appmod.oplist_client.fs, "get_file_bytes", fake_get)
+        r = client.get("/api/v1/get_zlabel", params={"name": "label.json"})
+        assert r.status_code == 200
+        assert captured["path"] == (
+            f"{appmod.SETTINGS.oplist_proj_dir}/{appmod.SETTINGS.oplist_proj_name}/zlabel/label.json"
+        )

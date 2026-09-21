@@ -1,6 +1,8 @@
 import hashlib
+from pathlib import Path
 
 from sqlalchemy import (
+    Boolean,
     Column,
     ForeignKey,
     Integer,
@@ -9,6 +11,8 @@ from sqlalchemy import (
     create_engine,
     func,
     select,
+    text,
+    update,
 )
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import (
@@ -45,6 +49,9 @@ class Project(Base):
     __tablename__ = "projects"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, unique=True)
+    # False -> the project is no longer a valid openlist project (marker removed,
+    # directory deleted/renamed). Kept for history, hidden from get_projects/get_tasks.
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
     tasks: Mapped[list["Task"]] = relationship("Task")
 
     def __repr__(self) -> str:
@@ -60,13 +67,9 @@ class Task(Base):
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
     anno_id: Mapped[str] = mapped_column(String, unique=True)
     filename: Mapped[str]
-    labels: Mapped[list["Label"]] = relationship(
-        secondary=link_task_label, back_populates="tasks"
-    )
+    labels: Mapped[list["Label"]] = relationship(secondary=link_task_label, back_populates="tasks")
     finished: Mapped[bool]
-    users: Mapped[list["User"]] = relationship(
-        secondary=link_task_user, back_populates="tasks"
-    )
+    users: Mapped[list["User"]] = relationship(secondary=link_task_user, back_populates="tasks")
 
     def __repr__(self) -> str:
         return f"Task(id={self.id}, anno_id={self.anno_id}, filename={self.filename}, labels={self.labels}, finished={self.finished}, users={self.users})"
@@ -74,14 +77,10 @@ class Task(Base):
 
 class Label(Base):
     __tablename__ = "labels"
-    id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, unique=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, unique=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, unique=True)
     color: Mapped[str] = mapped_column(String, default="#000000")
-    tasks: Mapped[list["Task"]] = relationship(
-        secondary=link_task_label, back_populates="labels"
-    )
+    tasks: Mapped[list["Task"]] = relationship(secondary=link_task_label, back_populates="labels")
 
     def __repr__(self) -> str:
         return f"Label(id={self.id}, name={self.name}, color={self.color})"
@@ -89,14 +88,10 @@ class Label(Base):
 
 class User(Base):
     __tablename__ = "users"
-    id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, unique=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, unique=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String, unique=True)
     finished_count: Mapped[int] = mapped_column(Integer, default=0)
-    tasks: Mapped[list["Task"]] = relationship(
-        secondary=link_task_user, back_populates="users"
-    )
+    tasks: Mapped[list["Task"]] = relationship(secondary=link_task_user, back_populates="users")
 
     def __repr__(self) -> str:
         return f"User(id={self.id}, name={self.name}, finished_count={self.finished_count})"
@@ -126,12 +121,11 @@ def create_or_update_projects(projects: list[dict[str, str | list[str]]]):
         if not projects:
             return
 
-        stmt_project = (
-            insert(Project)
-            .values([{"name": p["name"]} for p in projects])
-            .on_conflict_do_nothing()
-        )
+        names = [p["name"] for p in projects]
+        stmt_project = insert(Project).values([{"name": name} for name in names]).on_conflict_do_nothing()
         session.execute(stmt_project)
+        # re-activate projects that are back in the current scan
+        session.execute(update(Project).where(Project.name.in_(names)).values(active=True))
 
         for project in projects:
             project_files: list[str] = project["files"]  # type: ignore
@@ -143,6 +137,8 @@ def create_or_update_projects(projects: list[dict[str, str | list[str]]]):
             project_id = session.scalars(query).first()
             assert project_id is not None
 
+            rel_base_path = Path(SETTINGS.oplist_proj_dir) / project_name
+
             for i in range(0, len(project_files), batch):
                 stmt_task = (
                     insert(Task)
@@ -151,7 +147,7 @@ def create_or_update_projects(projects: list[dict[str, str | list[str]]]):
                             {
                                 "project_id": project_id.id,
                                 "anno_id": id_md5(
-                                    f"{SETTINGS.oplist_proj_dir}/{project_name}/{filename}"
+                                    f"{project_name}/{Path(filename).relative_to(rel_base_path)}"
                                 ),
                                 "filename": filename,
                                 "finished": False,
@@ -183,9 +179,7 @@ def insert_data(
             assert tmp is not None
 
             task_user = [{"task_id": task["id"], "user_id": t.id} for t in tmp]
-            stmt_task_user = (
-                insert(link_task_user).values(task_user).on_conflict_do_nothing()
-            )
+            stmt_task_user = insert(link_task_user).values(task_user).on_conflict_do_nothing()
             session.execute(stmt_task_user)
         if task and label:
             stmt_label = insert(Label).values(label).on_conflict_do_nothing()
@@ -196,9 +190,7 @@ def insert_data(
             assert tmp is not None
 
             task_label = [{"task_id": task["id"], "label_id": t.id} for t in tmp]
-            stmt_task_label = (
-                insert(link_task_label).values(task_label).on_conflict_do_nothing()
-            )
+            stmt_task_label = insert(link_task_label).values(task_label).on_conflict_do_nothing()
             session.execute(stmt_task_label)
 
         if task:
@@ -238,9 +230,7 @@ def insert_link_table(anno_id: str, label_name: str = "", user_name: str = ""):
 
         label = session.scalar(select(Label).where(Label.name == label_name))
         if label is not None:
-            stmt = insert(link_task_label).values(
-                {"task_id": task.id, "label_id": label.id}
-            )
+            stmt = insert(link_task_label).values({"task_id": task.id, "label_id": label.id})
             session.execute(stmt)
         user = session.scalar(select(User).where(User.name == user_name))
         if user is None:
@@ -271,7 +261,10 @@ def get_tasks(
     with session_maker() as session:
         if session is None:
             return []
-        query = select(Task)
+        # only expose tasks belonging to active projects
+        query = (
+            select(Task).join(Project, Task.project_id == Project.id).where(Project.active == True)  # noqa: E712
+        )
         if project > -1:
             query = query.where(Task.project_id == project)
         if finished == -1:
@@ -295,9 +288,48 @@ def get_projects() -> list[Project]:
     with session_maker() as session:
         if session is None:
             return []
-        query = select(Project).order_by(Project.id)
+        query = (
+            select(Project)
+            .where(Project.active == True)  # noqa: E712
+            .order_by(Project.id)
+        )
         projects = session.scalars(query).all()
         return list(projects)
+
+
+def deactivate_projects(
+    present_dirs: set[str],
+    confirmed_missing: set[str],
+) -> None:
+    """Mark projects as inactive.
+
+    A project is deactivated when its top-level directory is confirmed missing
+    from the scan (deleted/renamed) or confirmed present but without the project
+    marker. Directories that could not be inspected (not in either set) are left
+    untouched.
+    """
+    with session_maker() as session:
+        if session is None:
+            return
+        query = select(Project).where(Project.active == True)  # noqa: E712
+        for project in session.scalars(query):
+            if project.name in confirmed_missing or project.name not in present_dirs:
+                project.active = False
+        session.commit()
+
+
+def sync_projects_from_scan(
+    projects: list[dict[str, str | list[str]]],
+    present_dirs: set[str],
+    confirmed_missing: set[str],
+) -> None:
+    """Apply a project scan result to the DB.
+
+    New/known projects are upserted as active, and projects that no longer
+    qualify (marker removed or directory gone) are deactivated.
+    """
+    create_or_update_projects(projects)
+    deactivate_projects(present_dirs, confirmed_missing)
 
 
 def how_many_finished() -> int:
@@ -318,7 +350,22 @@ def get_task_by_anno_id(anno_id: str) -> Task | None:
         return task
 
 
+def _ensure_schema() -> None:
+    """Add columns introduced after a table was first created (SQLite).
+
+    ``Base.metadata.create_all`` only creates missing tables, it does not add new
+    columns to existing tables. This performs the minimal ALTER for the ``active``
+    column on legacy databases.
+    """
+    with engine.connect() as conn:
+        cols = [row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))]
+        if "active" not in cols:
+            conn.execute(text("ALTER TABLE projects ADD COLUMN active BOOLEAN NOT NULL DEFAULT 1"))
+            conn.commit()
+
+
 Base.metadata.create_all(engine)
+_ensure_schema()
 
 
 if __name__ == "__main__":

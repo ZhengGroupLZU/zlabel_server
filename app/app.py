@@ -1,8 +1,10 @@
 import asyncio
 import json
+import time
 import traceback
 from collections import OrderedDict
 from collections.abc import Callable
+from contextlib import asynccontextmanager, suppress
 from io import BytesIO
 
 import numpy as np
@@ -26,14 +28,104 @@ import app.db as db
 from app.config import SETTINGS
 from app.logger import ZLogger
 from app.openlist_api import OpenListAPIError, OpenListClient
+from app.project_scan import ScanResult, discover_projects
 from app.sam_ort import Predictor
 from app.worker import AutoMode, ReturnType, ZSamWorker
 from app.ztypes import Annotation, Point, Rect, SamReturn, annotation_checker
 
 oplist_client = OpenListClient(SETTINGS.oplist_host)
-app = FastAPI()
 
 logger = ZLogger("ZLabelServer")
+
+
+# --------------------------------------------------------------------------- #
+# Project auto-discovery
+# --------------------------------------------------------------------------- #
+# minimum seconds between scans triggered on GET /api/v1/get_projects, to avoid
+# hammering OpenList when the client polls; the periodic background scan always
+# runs on its own interval.
+_PROJECT_SCAN_THROTTLE = 2.0
+_project_scan_lock = asyncio.Lock()
+_last_project_scan = 0.0
+_scan_unavailable = False
+
+
+def _ensure_service_token() -> str:
+    """Return a valid OpenList token for the background scanner.
+
+    Precedence: an already-set token, then a configured static token
+    (``ZLSERVER_OPLIST_TOKEN``), then a username/password login. The static
+    token avoids needing a real OpenList user account for the scanner.
+    """
+    if oplist_client.token:
+        return oplist_client.token
+    if SETTINGS.oplist_token:
+        oplist_client.set_token(SETTINGS.oplist_token)
+        return oplist_client.token
+    if not SETTINGS.oplist_username or not SETTINGS.oplist_password:
+        raise RuntimeError("no OpenList token and no ZLSERVER_OPLIST_USERNAME/PASSWORD configured")
+    resp = oplist_client.auth.login(SETTINGS.oplist_username, SETTINGS.oplist_password)
+    oplist_client.set_token(resp.data.token)
+    return oplist_client.token
+
+
+def _scan_and_sync() -> ScanResult:
+    """Run one project scan and persist the result (blocks; runs in a thread)."""
+    _ensure_service_token()
+    result = discover_projects(oplist_client, SETTINGS)
+    db.sync_projects_from_scan(result.projects, result.present_dirs, result.confirmed_missing)
+    return result
+
+
+async def _maybe_scan(force: bool = False) -> None:
+    """Run a project scan unless one ran very recently."""
+    global _last_project_scan, _scan_unavailable
+    now = time.monotonic()
+    if not force and now - _last_project_scan < _PROJECT_SCAN_THROTTLE:
+        return
+    async with _project_scan_lock:
+        if not force and time.monotonic() - _last_project_scan < _PROJECT_SCAN_THROTTLE:
+            return
+        try:
+            await asyncio.to_thread(_scan_and_sync)
+        except Exception as e:
+            # avoid spamming the log every interval while OpenList/auth is down
+            if not _scan_unavailable:
+                _scan_unavailable = True
+                logger.warning(f"project scan unavailable: {e}")
+            logger.debug(traceback.format_exc())
+        else:
+            if _scan_unavailable:
+                _scan_unavailable = False
+                logger.warning("project scan recovered")
+        _last_project_scan = time.monotonic()
+
+
+async def _periodic_project_scan() -> None:
+    """Background task that rescans projects every ``project_scan_interval``."""
+    while True:
+        await asyncio.sleep(SETTINGS.project_scan_interval)
+        await _maybe_scan(force=True)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    tasks: list[asyncio.Task] = []
+    if SETTINGS.project_scan_interval > 0:
+        tasks.append(asyncio.create_task(_periodic_project_scan()))
+    # initial scan at startup (fire-and-forget; must not block startup)
+    tasks.append(asyncio.create_task(_maybe_scan(force=True)))
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
+
+
+app = FastAPI(lifespan=lifespan)
 
 SAM_MODEL = Predictor(
     model_dir=SETTINGS.model_dir,
@@ -239,12 +331,13 @@ async def save_zlabel(
     zlabel: bytes = Form(...),
     username: str = Form(...),
     filename: str = Form(...),
+    project: str = Form(""),
     authorization: str = Header(None),
 ):
     @oplist_client_try_run
     def save_zlabel_func():
         oplist_client.set_token(authorization)
-        file_path = f"{SETTINGS.oplist_zlabel_save_dir}/{filename}"
+        file_path = f"{SETTINGS.zlabel_save_dir(project)}/{filename}"
         resp = oplist_client.fs.stream_upload(file_path, BytesIO(zlabel), as_task=False)
         if resp.code == 200 and resp.message == "success":
             msg = {"message": "success", "data": None}
@@ -272,12 +365,18 @@ async def save_zlabel(
     methods=["GET", "POST"],
     response_class=JSONResponse,
 )
-async def get_zlabel(name: str, authorization: str = Header(None)):
+async def get_zlabel(
+    name: str,
+    project: str = Query(""),
+    authorization: str = Header(None),
+):
     @oplist_client_try_run
     def get_zlabel_func():
         oplist_client.set_token(authorization)
 
-        file_bytes = oplist_client.fs.get_file_bytes(f"{SETTINGS.oplist_zlabel_save_dir}/{name}")
+        file_bytes = oplist_client.fs.get_file_bytes(
+            f"{SETTINGS.zlabel_save_dir(project)}/{name}"
+        )
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content=json.loads(file_bytes.decode("utf-8")),
@@ -299,25 +398,11 @@ async def refresh_tasks(username: str = Query(...), password: str = Query(...)):
             content={"message": "failed", "data": "Unauthorized"},
             media_type="application/json",
         )
-    allowed_image_ext = [".png", ".jpg", ".jpeg"]
     oplist_client.set_token(response.data.token)
-    project_list = []
 
-    projects = oplist_client.fs.dirs(SETTINGS.oplist_proj_dir)
-    for project in projects.data:
-        img_files = oplist_client.fs.glob(f"{SETTINGS.oplist_proj_dir}/{project.name}", "*")
-        # logger.debug(img_files)
-        img_files_filtered = []
-        for img_file in img_files:
-            if any(img_file.lower().endswith(ext) for ext in allowed_image_ext):
-                img_files_filtered.append(img_file)
-        project_list.append(
-            {
-                "name": project.name,
-                "files": img_files_filtered,
-            }
-        )
-        db.create_or_update_projects(project_list)
+    # marker-based discovery (only top-level dirs with the marker become projects)
+    result = discover_projects(oplist_client, SETTINGS)
+    db.sync_projects_from_scan(result.projects, result.present_dirs, result.confirmed_missing)
 
     return JSONResponse(
         content={"message": "success", "data": None},
@@ -376,6 +461,9 @@ async def get_tasks(
 
 @app.get("/api/v1/get_projects")
 async def get_projects():
+    # trigger a project scan; the response is always the active project list,
+    # even when OpenList is temporarily unavailable.
+    await _maybe_scan()
     projects = db.get_projects()
     res = [
         {
