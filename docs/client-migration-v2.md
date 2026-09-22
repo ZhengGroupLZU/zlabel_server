@@ -18,12 +18,16 @@
 
 ## 1. 分阶段清单
 
-> 进度：**第一批（协议层）已完成** — C1、C2、C3、C7 已落地，并且顺带把
-> C9/C10 里客户端已经在用的三个调用（labels / progress / scan）切到了 v2；
-> 服务端侧同样落地的配套改动：`ProjectOut.id`、`state` 支持逗号列表、
-> `order=random`、`scan` 不要求项目已存在、worker 侧 crop 提示词平移修复。
-> 第二批待做：C4 领取/租约 UI、C5 冲突详情弹窗与版本历史浏览、C6 提交/复核动作、
-> C8 图像 ETag 磁盘缓存、C9 标签编辑、C10 项目创建、C11 剩余 i18n、C12 补充 GUI 测试。
+> 进度：**C1–C12 全部完成**（协议层 C1–C3+C7、协作层 C4–C6、第三批 C8–C12）。
+> 服务端侧配套改动：`ProjectOut.id`、`state` 支持逗号列表、`order=random`、`scan` 不要求项目已存在、
+> worker 侧 crop 提示词平移修复、心跳只续活租约（提交后需重新领取）、读写令牌分离
+> （读=用户令牌、写=服务账号）。
+> C8 帧磁盘缓存（`~/.zlabel/cache/images` + ETag/If-None-Match，304 走本地）、
+> C9 标签表编辑（reviewer+，逐条提交）、C10 新建服务端项目（目录+标记文件+自动扫描）、
+> C11 zh_CN 全量翻译（375 条，0 unfinished）、C12 端到端覆盖：`tests/v2/test_client_contract.py`
+> 含"两人抢同一帧 → 租约过期 → 接管 → 前者保存被拒（带持有者名）→ reviewer 强制接管"，
+> 以及领取→保存→提交→复核→退回→重开与版本历史全链路。
+> 剩余：仅 M5 验收（DoD 逐条走查 + 真实 OpenList/GPU 环境试跑）。
 
 
 ### C1 版本与能力探测（阻塞项）

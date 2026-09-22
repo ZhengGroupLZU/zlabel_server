@@ -350,3 +350,47 @@ def test_version_history_contract(api, ol, tmp_path):
     current = api.annotation_version(anno_id, 3, PROJ)
     assert current is not None and "Root" in current
     assert api.annotation_version(anno_id, 99, PROJ) is None
+
+
+def test_lease_expiry_and_takeover(client, api, ol, client_api, tmp_path):
+    """Two desktop clients, one frame: the loser is told, not silently overwritten.
+
+    This is the flow the GUI drives: open a frame -> lease -> work; a lease that
+    lapses can be taken over, and the original holder's save is refused with the
+    holder details so the client can re-claim or go read-only.
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from v2.db.models import Task, utcnow
+
+    _login(api)
+    ol.users["bob"] = "pw"
+    second = client_api.ZLServerApiClient("bob", "pw", api.sam_api)
+    assert second.login("bob", "pw"), second.last_login_error
+
+    anno_id, document = _ready_frame(api, ol, tmp_path)
+    assert api.claim(anno_id).ok
+
+    # the first client's lease lapses (the server TTL is ZLSERVER_LEASE_MINUTES)
+    with client.app.state.db.session_scope() as session:
+        task = session.scalar(select(Task).where(Task.anno_id == anno_id))
+        task.claimed_by = None
+        task.lease_expires_at = utcnow() - timedelta(minutes=1)
+    assert api.heartbeat(anno_id).status == 409  # no live lease to renew any more
+
+    # the second annotator picks the frame up and saves
+    taken = second.claim(anno_id)
+    assert taken.ok and taken.task["claimed_by"] == "bob"
+    assert second.save_zlabel(document, project=PROJ).ok
+
+    # the first client is refused, with the new holder in the detail
+    stale = api.save_zlabel(document, project=PROJ)
+    assert stale.status == 409 and "bob" in stale.message  # names the new holder
+    detail = api.claim(anno_id)
+    assert detail.status == 409 and detail.claimed_by == "bob"
+
+    # and a reviewer can always take over
+    forced = api.claim(anno_id, force=True)
+    assert forced.ok and forced.task["claimed_by"] == "rainy"
