@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # --- task lease --------------------------------------------------------
     lease_minutes: int = 30
 
+    # --- labels ------------------------------------------------------------
+    # colour used when an annotation introduces a label the server does not know yet
+    default_label_color: str = "#000000"
+
     # --- OpenList ----------------------------------------------------------
     oplist_host: str = "http://127.0.0.1:5244"
     oplist_username: str = ""

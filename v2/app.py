@@ -11,16 +11,23 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
-from v2.api.v2 import health
+from v2.api.v2 import auth, health, labels, projects
 from v2.core.config import Settings, get_settings
 from v2.core.errors import install_error_handlers
 from v2.core.logging import get_logger, set_request_id
 from v2.db.base import Database
+from v2.services.container import Services
+
+API_PREFIX = "/api/v2"
 
 logger = get_logger("zlabel.v2.app")
 
 
-def create_app(settings: Settings | None = None, database: Database | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    database: Database | None = None,
+    services: Services | None = None,
+) -> FastAPI:
     settings = settings or get_settings()
     settings.ensure_dirs()
     db = database or Database(settings.database_url)
@@ -36,6 +43,7 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
     app.state.settings = settings
     app.state.db = db
+    app.state.services = services or Services.build(settings, db)
 
     install_error_handlers(app)
 
@@ -46,6 +54,8 @@ def create_app(settings: Settings | None = None, database: Database | None = Non
         response.headers["X-Request-ID"] = rid
         return response
 
-    app.include_router(health.router, prefix="/api/v2")
-    # M4 mounts the v1 compat router here (served by the same services/DB).
+    app.include_router(health.router, prefix=API_PREFIX)
+    app.include_router(auth.router, prefix=API_PREFIX)
+    app.include_router(projects.router, prefix=API_PREFIX)
+    app.include_router(labels.router, prefix=API_PREFIX)
     return app
