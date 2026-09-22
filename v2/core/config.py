@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     identity: Literal["openlist", "local"] = "openlist"
     # optional: create this admin account at startup when it does not exist yet
     bootstrap_password: str = ""
+    # --- web administration UI ---------------------------------------------
+    admin_enabled: bool = True
+    admin_path: str = "/admin"
+    # signs the admin UI's own cookies; set a long random value in production
+    secret_key: str = ""
+
     # project access: "open" = any account may work on any project (pre-P4
     # behaviour), "strict" = only `project_members` (global admins always see all)
     project_access_mode: Literal["open", "strict"] = "open"

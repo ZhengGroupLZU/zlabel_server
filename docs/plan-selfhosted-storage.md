@@ -18,7 +18,10 @@
 
 ## 待做
 
-- **P5 Web 后台**：管理 REST 已就绪（见上），还差一个服务端渲染的 Web UI（FastAPI + Jinja2/HTMX）调用它们：用户/成员/项目/文件浏览上传/用量/审计。目前用 CLI + curl 即可完成全部管理动作。
+- **P5 Web 后台（首版已上线）**：`/admin` 用 `starlette-admin` 挂载（`v2/admin/`），cookie 会话复用 `AuthService`（仅 admin 角色，CSRF 由库内置）。
+  页面：Dashboard（存储/项目/任务状态）、Users（角色/启停）、Projects（仅元数据）、Members（P4）、Labels、只读 Frames 与 Audit log。
+  仍待补：**文件浏览器/上传**（本地后端）、项目创建与扫描按钮、密码重置页（这些目前走 CLI 或 `/api/v2/admin/*`）；
+  因为页面按服务层能力拆分，后续想换成自研 Jinja2+HTMX 可以逐页替换。
 - **P6 下线 OpenList**：删除 `v2/vendor/openlist_api/`（≈2000 行）与 `OpenListIdentity/OpenListAdapter`，`ZLSERVER_STORAGE_BACKEND`/`IDENTITY` 开关一并移除。
 
 ## 权限模型（P4）

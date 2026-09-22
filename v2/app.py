@@ -102,6 +102,11 @@ def create_app(
 
     install_error_handlers(app)
 
+    # web administration UI (cookie sessions, admin role only)
+    from v2.admin import mount_admin
+
+    mount_admin(app, app.state.services)
+
     @app.middleware("http")
     async def _request_id(request: Request, call_next):
         rid = set_request_id(request.headers.get("X-Request-ID"))

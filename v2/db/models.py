@@ -123,6 +123,8 @@ class Label(Base):
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
+    project: Mapped[Project] = relationship(lazy="joined")
+
 
 class Task(Base):
     """One labelable image. ``state`` drives the review workflow, the claim trio

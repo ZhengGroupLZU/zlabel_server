@@ -13,6 +13,15 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
   `project members <project>` · `project add-member <project> <user> --role ...` ·
   `storage usage` · `migrate-layout --root <storage-root> [--dry-run]` (moves
   `<project>/zlabel` to `<project>/.zlabel/annos`; see `docs/plan-selfhosted-storage.md`)
+- **Web admin UI** (`/admin`, `ZLSERVER_ADMIN_ENABLED` to turn it off):
+  `starlette-admin` mounted in `create_app` with `ZLabelAuthProvider` - a **cookie**
+  session for the admin role, backed by the same `AuthService`/sessions as the API
+  (the desktop keeps using Bearer tokens). Pages: dashboard (storage/projects/
+  states), Users, Projects (metadata only), Members, Labels, read-only Frames and
+  Audit log. Anything with a side effect outside the database (creating a project
+  directory, hashing a password, uploading frames) is **not** offered there - those
+  stay in the API/CLI, so this layer can be replaced page by page later
+  (`v2/admin/`; see `docs/plan-selfhosted-storage.md`).
 - Admin REST (global `admin` role): `/api/v2/admin/users` (+ `/{id}`, `/{id}/password`),
   `/api/v2/admin/storage`, `/api/v2/admin/files` (list/upload/download/delete/mkdir/move,
   local backend only). Project membership: `/api/v2/projects/{p}/members`. Project

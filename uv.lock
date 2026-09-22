@@ -434,6 +434,15 @@ wheels = [
 ]
 
 [[package]]
+name = "itsdangerous"
+version = "2.2.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/9c/cb/8ac0172223afbccb63986cc25049b154ecfb5e85932587206f42317be31d/itsdangerous-2.2.0.tar.gz", hash = "sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl", hash = "sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef" },
+]
+
+[[package]]
 name = "jedi"
 version = "0.19.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -1214,6 +1223,21 @@ wheels = [
 ]
 
 [[package]]
+name = "starlette-admin"
+version = "1.0.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+dependencies = [
+    { name = "itsdangerous" },
+    { name = "jinja2" },
+    { name = "python-multipart" },
+    { name = "starlette" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ec/d5/c17af70c83c252195e5daa3e33a6884533c62a1cd4069c511da98c02225f/starlette_admin-1.0.1.tar.gz", hash = "sha256:0a818db92cbf5a2e24b3f1640028d6468d905228b20b8f6621d0ce97841122f8" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/f5/cf/fec1c43aaaa6e5a328f2f13b5eb049c393ea7c6d6f19c6aa772d2f11b364/starlette_admin-1.0.1-py3-none-any.whl", hash = "sha256:846b97e7a08b6bc453a91ce4ea64d1fe241de3b4555a0207c39c520874dd2ae7" },
+]
+
+[[package]]
 name = "tornado"
 version = "6.5.2"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
@@ -1275,6 +1299,15 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/82/5c/e6082df02e215b846b4b8c0b887a64d7d08ffaba30605502639d44c06b82/typing_inspection-0.4.0.tar.gz", hash = "sha256:9765c87de36671694a67904bf2c96e395be9c6439bb6c87b5142569dcdd65122" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/31/08/aa4fdfb71f7de5176385bd9e90852eaf6b5d622735020ad600f2bab54385/typing_inspection-0.4.0-py3-none-any.whl", hash = "sha256:50e72559fcd2a6367a19f7a7e610e6afcb9fac940c650290eed893d61386832f" },
+]
+
+[[package]]
+name = "tzdata"
+version = "2026.4"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/e4/31/3d74fa778a63b98b7374323befcc0be5ab3bd94afd4096a0124e7379152c/tzdata-2026.4.tar.gz", hash = "sha256:f1b8bd365d8d210c55353f4d7f8d6d8561c0ba50d704b700d195a9424bba0d79" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/f9/bc/8737e8d54cf51106118039b83f485a4783112fab49ea9d044b234978a46e/tzdata-2026.4-py2.py3-none-any.whl", hash = "sha256:c2169a8b0a7a5e9674da5a135ccdfb2b3e671b333ed9fed17b41f73c34476e81" },
 ]
 
 [[package]]
@@ -1392,6 +1425,8 @@ dependencies = [
     { name = "requests" },
     { name = "rich" },
     { name = "sqlalchemy" },
+    { name = "starlette-admin" },
+    { name = "tzdata" },
 ]
 
 [package.dev-dependencies]
@@ -1418,6 +1453,8 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.3" },
     { name = "rich", specifier = ">=14.0.0" },
     { name = "sqlalchemy", specifier = ">=2.0.43" },
+    { name = "starlette-admin", specifier = ">=1.0.1" },
+    { name = "tzdata", specifier = ">=2026.4" },
 ]
 
 [package.metadata.requires-dev]
