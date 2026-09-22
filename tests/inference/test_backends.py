@@ -6,7 +6,7 @@ import numpy as np
 import onnxruntime as ort
 import pytest
 
-from app.sam_ort.backends import OrtSession, build_providers
+from inference.sam_ort.backends import OrtSession, build_providers
 
 EDGE_ENCODER = "assets/onnx/edge_sam_3x_encoder.onnx"
 

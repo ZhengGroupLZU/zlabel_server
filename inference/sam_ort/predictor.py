@@ -14,8 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
-from app.sam_ort.runner import Sam2Runner, Sam3Runner, SamRunner
-from app.ztypes import PvsResult, SamOnnxResult
+from inference.sam_ort.runner import Sam2Runner, Sam3Runner, SamRunner
+from inference.ztypes import PvsResult, SamOnnxResult
 
 MODEL_FILES: dict[str, tuple[str, str]] = {
     "SAM": ("sam_vit_b_encoder.onnx", "sam_vit_b_decoder.onnx"),

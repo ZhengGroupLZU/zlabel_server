@@ -13,16 +13,17 @@
 | # | 决策 | 理由 |
 |---|---|---|
 | D1 | **OpenList 作身份源 + 服务端签发 session**：登录仍用 OpenList 账号，服务端查 OpenList 校验后签发自己的 token，`users` 表按 OpenList 用户 id 存角色/统计，并把该用户的 OpenList token 存在会话里用于文件访问 | 保留 OpenList 的按用户 ACL；同时获得本地角色/领取/审计能力；桌面端登录字段不变 |
-| D2 | **新增 `/api/v2` + 保留 `/api/v1` 兼容层** | 旧桌面端在 v2 开发期继续可用；可逐端点灰度、可对比、可回滚 |
+| D2 | **只保留 `/api/v2`，v1 彻底删除** | 少维护一套适配代码；代价是没有灰度、服务端与桌面端必须一次性同步升级（见 §10、§12） |
 | D3 | **推理独立进程 + 队列** | 消除"全局当前帧"错帧 bug；API 重启不影响模型；GPU 排队不占 API worker；可水平扩 GPU |
 | D4 | **领取制 + 复核状态机** | 多人协作不撞车（租约自动过期）；复核可退回；进度按状态统计 |
 
 ## 3. 目录结构
 
-v1 冻结不再改（`app/` 保留原样，只允许修 bug），v2 全部在 `v2/`，两者由同一个 FastAPI app 挂载：
+v1 已删除（代码留档在 `onnx` 分支）。可复用资产先搬出，再删 v1：
 
 ```
-app/                     # v1：冻结参考实现（/api/v1 的语义基准）
+inference/               # 从 app/ 搬来的推理资产（sam_ort/、worker.py、ztypes.py、
+                         # bbox_overlaps.py、debug_save.py、config.py、logging.py）
 v2/
   main.py                # FastAPI 装配（include v2 routers + v1 兼容 router）+ lifespan
   core/
@@ -35,8 +36,9 @@ v2/
     models.py            # SQLAlchemy 模型（见 §4）
     repositories/        # 每个聚合一个仓库（projects/tasks/annotations/users/labels/audit）
     migrations/          # alembic
+  vendor/openlist_api/   # vendored 第三方 OpenList SDK（原 app/openlist_api）
   adapters/
-    openlist.py          # 唯一出口：包装 app/openlist_api（vendored SDK）+ 服务账号/token 注入
+    openlist.py          # 唯一出口：包装 vendor/openlist_api + 会话 token 注入
     inference.py         # InferenceClient（HTTP 调推理进程）
   services/
     auth_service.py      # 登录、会话、角色引导（首个用户=admin）
@@ -46,10 +48,9 @@ v2/
     stats_service.py     # 进度、按人统计
   api/v2/
     auth.py projects.py tasks.py annotations.py images.py predict.py labels.py health.py
-  contracts/             # 与桌面端共享的线格式（AutoMode/ReturnType/SamReturn/Point/Rect/Polygon）
+  contracts/             # 与桌面端共享的线格式（转发 inference/ztypes 的枚举与结果类型）
   schemas/               # 请求/响应模型（pydantic v2）
-  inference_worker/      # 独立进程的 entrypoint（挂 sam_ort/worker/ztypes）
-inference/               # 从 app/ 原样搬来的推理资产（sam_ort/、worker.py、ztypes.py、bbox_overlaps.py）
+  inference_worker/      # 独立进程的 entrypoint（复用 inference/ 的资产）
 docs/
   architecture-v2.md     # 本文
   client-migration-v2.md # 桌面端改造清单
@@ -166,17 +167,21 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 - 否则回退 `(.+?)[_\- ]*(\d+)\.(ext)` → `group_name=前缀, day=序号`；都不匹配则 `group_name="", day=0`。
 - v2 客户端直接用服务端字段，删除客户端的文件名猜测；v1 兼容层保持旧返回（不带 group/day）。
 
-## 10. v1 兼容层
+## 10. v1 的删除与不可回退点
 
-`/api/v1/*` 全部保留，只做两件事：
+v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。搬迁/删除边界：
 
-1. **鉴权适配**：`Authorization` 里若是 OpenList token（v1 客户端行为），自动为该用户建立/复用一条 `sessions`（`client_info="v1-compat"`），后续走同一套服务层；若已是 v2 session token 则直接使用。
-2. **序列化适配**：`{message, data}` 信封、`predict` 的 form + `data` JSON、`get_tasks` 字段名、`labels`/`how-many-finished` 旧形状。
+**搬走（继续服务 v2）**
+- `app/sam_ort/`、`app/worker.py`、`app/ztypes.py`、`app/bbox_overlaps.py`、`app/debug_save.py` → `inference/`（模型参数与 logger 各自成模块：`inference/config.py`、`inference/logging.py`）
+- `app/openlist_api/`（vendored SDK）→ `v2/vendor/openlist_api/`，由 `v2/adapters/openlist.py` 唯一引用
+- 数值回归测试（preprocess/postprocess/tokenize/worker/backends/models_slow/cuda）→ `tests/inference/`
 
-顺带修掉 v1 两个已确认的不一致（不破坏旧客户端）：
+**删除（v1 专属）**
+- `app/app.py`（v1 全部路由与模块级状态）、`app/db.py`、`app/config.py`、`app/logger.py`、`app/project_scan.py`、`app/schemas.py`
+- v1 的接口/DB 语义测试（test_api / test_auth / test_labels / test_save_zlabel / test_missing_tasks / test_anno_id / test_project_scan）——覆盖在 M2 用 v2 服务层测试重建；`anno_id` 契约已在 `tests/v2/test_models.py` 固化
+- 未使用依赖 `fastapi-users`、`typer`；`.env.onnx`（v1 变量名）→ `.env.example`（`ZLV2_*`）
 
-- `refresh_tasks`：`username/password` 改为可选，改用会话鉴权，保留 `force`。
-- `get_image`：新增可选 `project`；`name` 为相对路径时按项目拼路径（绝对路径行为不变）。
+**不可回退点**：`/api/v1` 与 `zlabel_server.db` 一起失效。回滚只有两条路——部署上一个 v2 版本（推荐，数据面不变），或整体退回 `onnx` 分支（必须同时退回旧客户端，且新旧库数据不互通）。
 
 ## 11. 可观测性与运维
 
@@ -192,19 +197,20 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 | M1 | v2 骨架（config/db/models/security/health）+ alembic 初始迁移 | ✅ 已完成：`/api/v2/health` 可用，`upgrade head`/`downgrade base`/`alembic check` 全绿 |
 | M2 | 服务层 + v2 端点（auth/projects/tasks/annotations/images/labels/progress）+ 假 OpenList/假推理测试 | v2 用例全绿（含 role/lease/conflict） |
 | M3 | 推理进程 + InferenceClient（embedding 缓存、health、metrics） | 重复请求命中缓存；API 重启不影响 worker |
-| M4 | v1 兼容层改由 v2 服务实现 + 双跑对比脚本（同一数据集打 v1/v2 逐字段 diff） | 桌面端现有功能在 v1 路径下行为等价 |
-| M5 | 桌面端切 v2（见 `client-migration-v2.md`），逐端点灰度 | 新客户端对 v1 路径调用数归零 |
-| M6 | 删除 v1 兼容层（v2.1），并把 `v2/` 包改名为 `app/` | 代码库只剩 v2 |
+| M1b | 资产搬迁（`inference/`、`v2/vendor/`）+ v1 彻底删除 + 基建/文档更新 | ✅ 已完成：`app/` 不存在，推理回归测试全绿 |
+| M2 | 服务层 + `/api/v2` 端点（auth/projects/tasks/annotations/images/labels/progress）+ hermetic 测试 | v2 用例全绿（含 role/lease/conflict） |
+| M3 | 推理进程 + InferenceClient（embedding 缓存、health、metrics） | 重复请求命中缓存；API 重启不影响 worker |
+| M4 | 桌面端切 v2（见 `client-migration-v2.md`） | 客户端全部调用走 `/api/v2` |
+| M5 | 验收：DoD §14 全项通过 | 交付 |
 
-回滚：任一步失败 → 桌面端 `settings.api_version=v1` 立即回到旧行为；服务端可整体回退 `onnx` 分支部署。
+回滚：v1 已删除，v2 与 v1 不互通，因此切换需要一个明确的停机窗口。窗口内回滚 = 部署上一个 v2 版本（数据面不变，v2 从 M1 起就一直用新库）；只有放弃 v2 时才退回 `onnx` 分支 + 旧客户端。
 
 ## 13. 测试策略
 
 - **单元**：services（领取/租约/状态机/角色/冲突）、分组解析、schema 校验。
-- **API（hermetic）**：假 OpenList（沿用 `app/openlist_api` 的形状）+ 假推理；覆盖 401/403/404/409/租约/校验。
-- **契约 golden**：把桌面端真实 payload（`save_zlabel` form、`predict` 的 data JSON、`{message,data}` 响应）固化为用例，v1 兼容层逐字段通过。
-- **数值回归**：复用 `app/sam_ort` 既有用例（pre/postprocess、tokenize、worker、models_slow），推理资产搬迁后原样通过。
-- **对比测试**：v1 服务端（onnx 分支）与 v2 在同一数据集跑同一批请求，diff JSON。
+- **API（hermetic）**：假 OpenList（沿用 `v2/vendor/openlist_api` 的形状）+ 假推理；覆盖 401/403/404/409/租约/校验。
+- **契约 golden**：把桌面端真实请求 payload（form / JSON）固化为夹具，客户端升级时作为回归基线（v1 服务端已删除，改为夹具对比）。
+- **数值回归**：`tests/inference/`（preprocess/postprocess/tokenize/worker/backends/models_slow），搬迁后原样通过。
 
 ## 14. 验收标准（DoD）
 
@@ -214,7 +220,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 4. 版本冲突：客户端 A 保存后，B 用旧 `base_version` 保存 → 409 带服务端版本与作者；`force` 仅 reviewer+。
 5. 进度 `{total,draft,submitted,approved,rejected}` 与任务状态一致，`by_user` 与审计一致。
 6. 推理进程挂掉/重启：存取/复核照常，仅 predict 返回 503 且客户端有可读提示。
-7. v1 兼容层：未改版的桌面端连 v2 服务器，登录/取任务/取图/读写标注/推理全部照常。
+7. 桌面端（v2 版）与服务器同步升级后，登录/取任务/取图/读写标注/复核/推理全链路可用；旧版客户端连 v2 服务器会被明确拒绝（版本不匹配）。
 8. 除真 GPU 用例外的测试全绿；alembic 可从空库升到最新。
 
 ## 15. 已知风险
@@ -222,4 +228,5 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 - **OpenList token 生命周期**：会话保存用户 token，OpenList 侧过期/改密会导致 FS 401，需客户端重新登录（已定义 `session_stale`）。
 - **SQLite 写并发**：领取/提交是短事务，<50 人够用；上多副本需换 Postgres（仓库层已隔离，切换成本可控）。
 - **SAM3 显存**：vision arena ~7GB 不回收，worker 每帧建/销 session 的既有策略必须逐行保留。
-- **兼容层腐化**：M6 必须真的执行，否则 v1 适配代码长期堆积。
+- **无灰度能力**：`/api/v1` 已删除，服务端与桌面端必须同步发布；上线前要有停机窗口与“上一版 v2”的部署包。
+- **历史元数据不保留**：`.zlabel` 标注文件格式不变（历史标注可继续读取），但旧库里的领取/进度/标签元数据按决策丢弃。

@@ -73,7 +73,9 @@ def pcs_filter_nms(pred_boxes_xywh, pred_masks, scores, conf=0.25, iou=0.7, agno
     return masks[keep2], boxes_xyxy[keep2], sc[keep2], cls[keep2]
 
 
-def upscale_mask(mask_logits: np.ndarray, target_hw: tuple[int, int], mask_threshold: float = 0.0) -> np.ndarray:
+def upscale_mask(
+    mask_logits: np.ndarray, target_hw: tuple[int, int], mask_threshold: float = 0.0
+) -> np.ndarray:
     """Bilinear-upscale a (S,S) mask to (h,w) and threshold to binary (stretched inputs)."""
     m = mask_logits.astype(np.float32)
     if m.shape != target_hw:
@@ -81,7 +83,9 @@ def upscale_mask(mask_logits: np.ndarray, target_hw: tuple[int, int], mask_thres
     return (m > mask_threshold).astype(np.uint8)
 
 
-def upscale_mask_pad(mask_logits: np.ndarray, target_hw: tuple[int, int], mask_threshold: float = 0.0) -> np.ndarray:
+def upscale_mask_pad(
+    mask_logits: np.ndarray, target_hw: tuple[int, int], mask_threshold: float = 0.0
+) -> np.ndarray:
     """Upscale a mask from letterboxed space back to the original image (crop then resize).
 
     Mirrors ``ultralytics.utils.ops.scale_masks(padding=False)``: crop the right/bottom

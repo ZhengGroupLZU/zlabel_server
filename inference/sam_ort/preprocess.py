@@ -12,7 +12,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from app import debug_save
+from inference import debug_save
 
 SAM_MEAN = np.array([123.675, 116.28, 103.53], np.float32)
 SAM_STD = np.array([[58.395, 57.12, 57.375]], np.float32)
@@ -66,7 +66,9 @@ def preprocess_sam3(image_bgr: np.ndarray, target: int = 1008, pad: bool = False
         new_unpad = (round(w * r), round(h * r))
         im = cv2.resize(image_bgr, new_unpad, interpolation=cv2.INTER_LINEAR)
         dw, dh = target - new_unpad[0], target - new_unpad[1]
-        im = cv2.copyMakeBorder(im, 0, round(dh + 0.1), 0, round(dw + 0.1), cv2.BORDER_CONSTANT, value=(114,) * 3)
+        im = cv2.copyMakeBorder(
+            im, 0, round(dh + 0.1), 0, round(dw + 0.1), cv2.BORDER_CONSTANT, value=(114,) * 3
+        )
     else:
         im = cv2.resize(image_bgr, (target, target), interpolation=cv2.INTER_LINEAR)
     if pad:

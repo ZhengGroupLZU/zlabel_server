@@ -1,6 +1,6 @@
 # 桌面端接入 v2 — 改造清单
 
-> 配套文档：`docs/architecture-v2.md`（服务端设计）。原则：**客户端新增一个 v2 API 客户端，`ZSession` 保持是唯一切换点**，UI 逐步上线，随时可用 `settings.api_version=v1` 回退。
+> 配套文档：`docs/architecture-v2.md`（服务端设计）。原则：**`ZSession` 是唯一切换点**，v2 API 客户端替换掉旧客户端（v1 服务端已删除，客户端不再保留双协议）。因为没有兼容层，桌面端与服务端必须**同步发布**：上线前确认两者版本匹配（登录时用 `/api/v2/health` 校验）。
 
 ## 0. 影响面总览
 
@@ -8,29 +8,29 @@
 
 | 层 | 文件 | 改动 |
 |---|---|---|
-| API 客户端 | `zlabel/utils/api_helper.py` | 新增 `ZLServerApiHelperV2`（同方法名，新协议）；v1 原样保留 |
-| 组装 | `zlabel/utils/session.py` | 按 `settings.api_version` 选择客户端；暴露 `claim/release/submit/review/versions` 等新能力（v1 下为 no-op/受支持标志） |
+| API 客户端 | `zlabel/utils/api_helper.py` | 重写为 v2 协议的 `ZLServerApiClient`（方法名尽量保持不变，减少上层改动）；旧的 `{message,data}` 信封/OpenList-token 逻辑删除 |
+| 组装 | `zlabel/utils/session.py` | 直接组装 v2 客户端；暴露 `claim/release/submit/review/versions` 等新能力，并把登录时探测到的 `capabilities` 透给 UI |
 | Storage/Inference | `zlabel/utils/backend.py` | `RemoteStorage` 补领取/状态/版本方法；`RemoteInference` 去掉"当前帧"假设 |
 | 模型 | `zlabel/utils/project.py` | `Task` 增 `state/claimed_by/lease_expires_at/version/group/day(服务端)`；`User` 增 `role` |
-| 设置 | `zlabel/widgets/zsettings.py` | `api_version`、租约心跳/自动释放、v2 能力缓存 |
+| 设置 | `zlabel/widgets/zsettings.py` | 租约心跳/自动释放、服务端能力缓存、服务端版本 |
 | UI | `zlabel/widgets/*` | 领取冲突对话框、复核动作、版本历史、任务状态徽标、标签编辑（按角色） |
 | i18n/文档 | `i18n/*.ts`、`AGENTS.md`、`CHANGELOG.md` | 新字符串与新行为记录 |
 
 ## 1. 分阶段清单
 
-### C1 版本开关与能力探测（阻塞项）
-- `ZSettings` 增 `api_version: Literal["v1","v2"] = "v1"`；设置对话框 Inference/Remote 页加下拉。
-- `ZSession.build`：`api_version=="v2"` → `ZLServerApiHelperV2`；登录成功后 `GET /api/v2/health`，把 `capabilities` 存入 session（例如 `claim/review/labels_write/versions`）。
-- 新增 `session.capabilities`，UI 用它决定是否显示领取/复核/版本入口（v1 下自动隐藏）。
+### C1 版本与能力探测（阻塞项）
+- 登录成功后 `GET /api/v2/health`：校验 `version >= 2.0`，并把 `capabilities`（`tasks.claim`/`tasks.review`/`annotations.versions`/`labels.write`/`predict.stateless`）存入 session。
+- 服务器版本不匹配 → 明确提示「服务端版本过旧，请同步升级」，不进入标注界面（避免半可用状态）。
+- `session.capabilities` 供 UI 决定是否显示领取/复核/版本入口；服务端降级（如推理不可用）只灰掉相关动作，不影响标注与保存。
 
 ### C2 认证与会话
 - 登录响应新增 `user{name,role}` 与 `expires_at`；写入 `settings.username`/状态栏（显示角色：标注员/复核员/管理员）。
 - 新增 `logout()`；会话失效（401 `session_stale`）→ 自动重登一次，失败则弹"请重新登录"。
-- v1 下行为不变（token 仍是 OpenList token）。
+- token 语义变化：客户端持有的是**服务端 session token**（不是 OpenList token），仅内存持有；`session_stale` 时重新登录。
 
 ### C3 任务拉取（去掉文件名硬猜）
 - 改用 `GET /api/v2/projects/{p}/tasks?state=&claim=&mine=&limit=&order=sequence`；直接用服务端 `group/day`。
-- 删除/降级 `MainWindow._assign_remote_group`（v2 下不再需要；v1 回退时仍用）。
+- 删除 `MainWindow._assign_remote_group`（分组改由服务端给出）。
 - Fetch 过滤：`FetchType` 由 `FINISHED/UNFINISHED/ALL` 扩展为按 `state`（`draft/submitted/approved/rejected/all/mine`），设置项与文件 dock 的下拉同步更新。
 - 时间轴/拷贝上一帧改走 `GET /api/v2/projects/{p}/groups`（服务端给整组帧，不再受 `num` 截断影响）。
 
@@ -55,7 +55,7 @@
 
 ### C8 图像获取
 - 改调 `GET /api/v2/projects/{p}/images/{rel_path}`（ETag/`If-None-Match`）；v2.1 可加磁盘缓存（`~/.zlabel/cache/<sha>`）。
-- 相对路径口径统一：**客户端一律传项目内相对路径 + project**，不再依赖服务端返回绝对路径（与 v1 的 `get_tasks.filename` 现状解耦）。
+- 相对路径口径统一：**客户端一律传项目内相对路径 + project**；不再依赖服务端返回绝对路径（旧协议把 OpenList 绝对路径塞在 `filename` 里）。
 
 ### C9 标签
 - 从 `GET /api/v2/projects/{p}/labels` 拉取（含颜色/排序/归档），替换现在"从已上传标注里合并名字"的做法。
@@ -67,7 +67,7 @@
 
 ### C11 i18n 与文档
 - 新增字符串（领取/复核/版本/角色/状态）走 `uv run zlabel-uic`（lupdate）与 `uv run zlabel-translate`。
-- 更新 `AGENTS.md`（api_version、领取/复核、v2 端点）与 `CHANGELOG.md`。
+- 更新 `AGENTS.md`（session 鉴权、领取/复核、v2 端点、版本匹配要求）与 `CHANGELOG.md`。
 
 ### C12 测试
 - 单测：`ZLServerApiHelperV2`（fake HTTP：登录/领取冲突/409 版本冲突/503 推理）——用 `httpx`/`responses` 或注入 session stub。
@@ -78,7 +78,6 @@
 
 | 设置项 | 默认 | 说明 |
 |---|---|---|
-| `api_version` | `v1` | `v1`（旧协议，兼容层）/ `v2`；登录后可自动探测能力并提示升级 |
 | `auto_release_on_switch` | `true` | 切帧时主动释放租约 |
 | `lease_heartbeat_minutes` | `10` | 心跳间隔（服务端 TTL 30 分钟） |
 | `claim_conflict_action` | `ask` | 撞车时：`ask`/`skip`/`wait` |
@@ -90,23 +89,24 @@
 class Task(BaseModel):
     ...
     state: Literal["draft", "submitted", "approved", "rejected"] = "draft"
-    version: int = 0                 # 服务端标注版本（乐观锁 base_version）
-    claimed_by: str = ""             # 当前持有者
+    version: int = 0  # 服务端标注版本（乐观锁 base_version）
+    claimed_by: str = ""  # 当前持有者
     lease_expires_at: datetime | None = None
-    server_group: str = ""           # v2 服务端解析的分组（优先于本地 group 猜测）
+    server_group: str = ""  # v2 服务端解析的分组（优先于本地 group 猜测）
     review_note: str = ""
+
 
 class User(BaseModel):
     ...
     role: Literal["annotator", "reviewer", "admin"] = "annotator"
 ```
 
-## 4. 回退与灰度
+## 4. 发布与回退
 
-- 灰度顺序建议：C1→C2→C3→C7（无 UI 新增，风险最低）→C5→C4→C6→C8→C9→C10。
-- 每一步都可单独发布：`api_version=v1` 时新代码路径完全不启用（v2 客户端不实例化）。
-- 双端不同版本混跑：服务端 v2 + 客户端 v1 = 兼容层路径，行为与旧服务端一致（M4 双跑对比保证）。
-- 数据面：v2 用全新数据库，v1 兼容层也读写这个新库；旧库（`zlabel_server.db`）只被未升级的服务端使用，不参与 v2。
+- 没有 `/api/v1` 兼容层：服务端与桌面端必须**同批次发布**，建议先发服务端（旧客户端连上会得到明确的版本不匹配错误，而不是静默行为异常）。
+- 实施顺序（同一发布批次内）：C1→C2→C3→C7（协议层，风险最低）→C5→C4→C6→C8→C9→C10。
+- 回退：客户端与服务端一起退回上一版（v2 内部的版本）；数据面不变（v2 一直用同一个新库），因此回退不需要数据迁移。
+- 数据面：v2 用全新数据库；旧库（`zlabel_server.db`）与 `/api/v1` 一起废弃，不再参与任何流程。
 
 ## 5. 验收（客户端侧）
 
@@ -114,4 +114,4 @@ class User(BaseModel):
 2. 保存后他人以旧版本保存 → 服务端 409，客户端展示冲突详情并可重新加载。
 3. annotator 看不到复核入口；reviewer 可退回并填写原因，退回原因在客户端可见。
 4. 推理服务不可用时，标注/保存/复核全部照常，仅提示推理不可用。
-5. `api_version=v1` 时，界面与行为与当前发布版一致（无新增入口泄露）。
+5. 服务端版本不匹配时给出明确提示并阻止进入标注流程；服务端能力缺失时对应入口隐藏/灰置，不出现半可用状态。

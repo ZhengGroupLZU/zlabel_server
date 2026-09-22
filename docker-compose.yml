@@ -5,33 +5,44 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - ./data:/app/data
       - ./assets:/app/assets
-      - ./data/zlabel_server:/app/data
     environment:
-      - ZLSERVER_DATABASE_URL=data/zlabel_server.db
-      - ZLSERVER_VERSION=1.0.0
-      - ZLSERVER_MODEL_NAME=SlimSAM # EdgeSAM SAM SlimSAM SAM2 SAM3
-      - ZLSERVER_MODEL_DIR=assets/onnx
-      - ZLSERVER_ORT_BACKEND=CUDA # CPU CUDA (falls back to CPU if unavailable)
-      - ZLSERVER_ORT_THREADS=8
-      - ZLSERVER_OPLIST_HOST=http://172.20.0.3:5244
-      - ZLSERVER_OPLIST_PROJ_DIR=/zlabel_server/projects
-      - ZLSERVER_OPLIST_PROJ_NAME=seed_germ_1280
-      - ZLSERVER_IMAGE_CACHE_SIZE=241
-      - ZLSERVER_MIN_CONTOUR_AREA_RATIO=2.0e-5
+      - ZLV2_DATABASE_URL=sqlite+pysqlite:///./data/zlabel_server_v2.db
+      - ZLV2_UPLOAD_DIR=/app/data/uploads
+      - ZLV2_OPLIST_HOST=http://172.20.0.3:5244
+      - ZLV2_OPLIST_PROJ_DIR=/zlabel_server/projects
+      - ZLV2_OPLIST_PROJ_NAME=seed_germ_1280
+      - ZLV2_PROJECT_SCAN_INTERVAL=300
+      # the inference worker (separate service; see below / M3)
+      - ZLV2_INFERENCE_URL=http://zlabel_inference:8001
+      - ZLV2_INFERENCE_TOKEN=${ZLV2_INFERENCE_TOKEN:-change-me}
     networks:
       zlabel_server_network:
         ipv4_address: 172.20.0.2
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     depends_on:
       - openlist
     restart: unless-stopped
+
+  # Inference worker (M3): same image, worker entrypoint, owns the GPU.
+  # zlabel_inference:
+  #   build: {context: .}
+  #   command: ["sh", "-c", "uv run fastapi run v2/inference_worker/main.py --host 0.0.0.0 --port 8001"]
+  #   environment:
+  #     - ZLV2_MODEL_NAME=SlimSAM   # EdgeSAM SAM SlimSAM SAM2 SAM3
+  #     - ZLV2_MODEL_DIR=/app/assets/onnx
+  #     - ZLV2_ORT_BACKEND=CUDA     # CPU CUDA (falls back to CPU if unavailable)
+  #     - ZLV2_INFERENCE_TOKEN=${ZLV2_INFERENCE_TOKEN:-change-me}
+  #   volumes:
+  #     - ./assets:/app/assets
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+  #   networks:
+  #     zlabel_server_network:
+  #       ipv4_address: 172.20.0.4
+  #   restart: unless-stopped
 
   openlist:
     image: 'openlistteam/openlist:latest'

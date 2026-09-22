@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.openlist_api.exceptions import NotFoundError
-from app.openlist_api.fs import FileSystemAPI
+from v2.vendor.openlist_api.exceptions import NotFoundError
+from v2.vendor.openlist_api.fs import FileSystemAPI
 
 
 def test_get_file_bytes_missing_object_raises_not_found(monkeypatch):
@@ -28,4 +28,3 @@ def test_get_file_bytes_without_raw_url_raises_not_found(monkeypatch):
         api.get_file_bytes("/missing.zlabel")
 
     assert exc.value.status_code == 404
-

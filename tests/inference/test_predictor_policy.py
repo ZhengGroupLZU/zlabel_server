@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.sam_ort.backends import build_providers
-from app.sam_ort.predictor import Predictor
+from inference.sam_ort.backends import build_providers
+from inference.sam_ort.predictor import Predictor
 
 
 def _provider_names(backend: str) -> list[str]:
@@ -99,6 +99,7 @@ class FakeRunner:
     def __getattr__(self, name):
         # emulate SAM3-only segment_text capability (hasattr must be False otherwise)
         if name == "segment_text" and self._has_segment_text:
+
             def segment_text(texts, bboxes):
                 self.calls.append(("segment_text", texts, bboxes))
                 return []

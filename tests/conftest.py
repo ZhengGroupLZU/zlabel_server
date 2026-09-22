@@ -51,7 +51,7 @@ class FakePredictor:
         self.set_image_calls.clear()
 
     def predict(self, points=None, labels=None, bboxes=None, text=None, conf=None, iou=None):
-        from app.ztypes import SamOnnxResult
+        from inference.ztypes import SamOnnxResult
 
         self.calls.append({"points": points, "labels": labels, "bboxes": bboxes, "text": text})
         n = 1

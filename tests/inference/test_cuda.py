@@ -14,7 +14,7 @@ import numpy as np
 import onnxruntime as ort
 import pytest
 
-from app.sam_ort import Predictor
+from inference.sam_ort import Predictor
 
 pytestmark = pytest.mark.gpu
 

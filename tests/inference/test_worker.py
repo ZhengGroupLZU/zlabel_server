@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from conftest import IMG_SIZE, blob_mask
 
-from app.worker import ZSamWorker
-from app.ztypes import AutoMode, Point, Polygon, Rect, ReturnType, SamOnnxResult
+from inference.worker import ZSamWorker
+from inference.ztypes import AutoMode, Point, Polygon, Rect, ReturnType, SamOnnxResult
 
 
 class MaskPredictor:
@@ -19,7 +19,9 @@ class MaskPredictor:
 
     def predict(self, points=None, labels=None, bboxes=None, text=None, conf=None, iou=None):
         self.calls.append((points, labels, bboxes, text))
-        return [SamOnnxResult(mask=blob_mask(IMG_SIZE, box=b).astype(np.float32), score=0.9) for b in self.boxes]
+        return [
+            SamOnnxResult(mask=blob_mask(IMG_SIZE, box=b).astype(np.float32), score=0.9) for b in self.boxes
+        ]
 
 
 def make_worker(model, auto_mode=AutoMode.SAM, return_type=ReturnType.RECT):
@@ -116,7 +118,9 @@ class TestPostprocessMask:
         worker = make_worker(model)
         mask = np.zeros(IMG_SIZE, np.uint8)
         mask[200:300, 200:300] = 255
-        results = worker.postprocess_mask(mask, roi=Rect(x=100, y=100, w=500, h=500), return_type=ReturnType.RECT)
+        results = worker.postprocess_mask(
+            mask, roi=Rect(x=100, y=100, w=500, h=500), return_type=ReturnType.RECT
+        )
         assert len(results) == 1
         # rect is offset back into the original image coordinates
         assert results[0].x >= 100 and results[0].y >= 100

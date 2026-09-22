@@ -19,15 +19,19 @@ WORKDIR /app
 # Install uv using pip
 RUN python3 -m pip install uv -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# Copy project files
+# Copy project files (v1's app/ no longer exists: the API lives in v2/, the
+# inference assets in inference/)
 COPY ./.python-version /app/.python-version
 COPY ./pyproject.toml /app/pyproject.toml
 COPY ./uv.lock /app/uv.lock
-COPY ./app /app/app
+COPY ./alembic.ini /app/alembic.ini
+COPY ./v2 /app/v2
+COPY ./inference /app/inference
 
 RUN uv sync
 
 EXPOSE 8000
 
-# Define the command to run the application
-CMD ["uv", "run", "fastapi", "run", "app/app.py", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Apply migrations, then serve the API. The inference worker runs as its own
+# service (see docker-compose.yml) so model reloads never restart the API.
+CMD ["sh", "-c", "uv run alembic upgrade head && uv run fastapi run v2/main.py --host 0.0.0.0 --port 8000 --workers 1"]

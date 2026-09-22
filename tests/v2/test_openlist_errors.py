@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 import requests
 
-from app.openlist_api.client import BaseClient
-from app.openlist_api.exceptions import NotFoundError, OpenListAPIError
+from v2.vendor.openlist_api.client import BaseClient
+from v2.vendor.openlist_api.exceptions import NotFoundError, OpenListAPIError
 
 
 class _Resp:

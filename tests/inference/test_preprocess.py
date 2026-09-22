@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
-from app.sam_ort.preprocess import preprocess_sam, preprocess_sam3, preprocess_sam_letterbox
+from inference.sam_ort.preprocess import preprocess_sam, preprocess_sam3, preprocess_sam_letterbox
 
 SAM_MEAN = np.array([123.675, 116.28, 103.53], np.float32)
 SAM_STD = np.array([[58.395, 57.12, 57.375]], np.float32)

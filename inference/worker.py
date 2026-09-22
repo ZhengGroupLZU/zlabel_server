@@ -7,15 +7,15 @@ import numpy as np
 from numpy.typing import NDArray
 from rich import print  # noqa: F401
 
-from app.logger import ZLogger
-from app.sam_ort import Predictor
-from app.sam_ort.postprocess import (
+from inference.logging import ZLogger
+from inference.sam_ort import Predictor
+from inference.sam_ort.postprocess import (
     contour_filter,
     nms_filter,
     reduce_contour_points,
     smooth_contour,
 )
-from app.ztypes import (
+from inference.ztypes import (
     AutoMode,
     Point,
     Polygon,

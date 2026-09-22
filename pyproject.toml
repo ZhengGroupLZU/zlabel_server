@@ -1,12 +1,11 @@
 [project]
 name = "zlabel-server"
 version = "0.1.0"
-description = "Add your description here"
+description = "ZLabel annotation backend (v2): sessions/roles, task claim + review, annotations, OpenList storage"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "alembic>=1.20.0",
-    "fastapi-users>=15.0.1",
     "fastapi[standard]>=0.115.12",
     "numpy>=2.2.5",
     "onnxruntime-gpu==1.26.0",
@@ -17,7 +16,6 @@ dependencies = [
     "requests>=2.32.3",
     "rich>=14.0.0",
     "sqlalchemy>=2.0.43",
-    "typer>=0.15.0",
 ]
 
 [[tool.uv.index]]
@@ -30,7 +28,7 @@ python-install-mirror = "https://gh-proxy.com/https://github.com/astral-sh/pytho
 [tool.ruff]
 line-length = 110
 # alembic autogenerates files with its own (dated) template style
-extend-exclude = ["v2/db/migrations"]
+extend-exclude = ["v2/db/migrations", "v2/vendor"]
 
 [tool.ruff.lint]
 select = [

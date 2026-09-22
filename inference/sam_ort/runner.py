@@ -18,17 +18,17 @@ from pathlib import Path
 
 import numpy as np
 
-from app import debug_save
-from app.sam_ort.backends import OrtSession
-from app.sam_ort.postprocess import (
+from inference import debug_save
+from inference.sam_ort.backends import OrtSession
+from inference.sam_ort.postprocess import (
     pcs_filter_nms,
     pcs_scores,
     upscale_mask,
     upscale_mask_pad,
 )
-from app.sam_ort.preprocess import preprocess_sam, preprocess_sam3, preprocess_sam_letterbox
-from app.sam_ort.tokenize import SimpleTokenizer
-from app.ztypes import PvsResult, SamOnnxResult
+from inference.sam_ort.preprocess import preprocess_sam, preprocess_sam3, preprocess_sam_letterbox
+from inference.sam_ort.tokenize import SimpleTokenizer
+from inference.ztypes import PvsResult, SamOnnxResult
 
 SAM_IMG = 1024
 SAM3_IMG = 1008
@@ -46,7 +46,9 @@ def _box_to_points(box_xyxy_px) -> tuple[list[tuple[float, float]], list[float]]
 class _SamDecoderMixin:
     """Shared prompt->decoder logic for SAM-family (encoder -> image_embeddings -> decoder)."""
 
-    def __init__(self, letterbox: bool = False, img_size: int = SAM_IMG, backend: str = "CPU", threads: int = 4):
+    def __init__(
+        self, letterbox: bool = False, img_size: int = SAM_IMG, backend: str = "CPU", threads: int = 4
+    ):
         self._letterbox = letterbox
         self._img_size = img_size
         self._backend = backend
@@ -105,9 +107,13 @@ class _SamDecoderMixin:
         out = decoder.run(feeds)
         masks = out["masks"][0]  # (N, 1024, 1024) for SAM/SlimSAM, (N, 256, 256) for EdgeSAM
         scores = out.get("scores", out.get("iou_predictions"))[0]  # (N,)
-        raw_scale = (self._ratio, self._ratio) if self._letterbox else (
-            masks[0].shape[1] / self._orig_shape[1],
-            masks[0].shape[0] / self._orig_shape[0],
+        raw_scale = (
+            (self._ratio, self._ratio)
+            if self._letterbox
+            else (
+                masks[0].shape[1] / self._orig_shape[1],
+                masks[0].shape[0] / self._orig_shape[0],
+            )
         )
         debug_save.save_image("03_raw_mask", masks[0], prompt_scale=raw_scale)
         results = []
@@ -137,8 +143,15 @@ class _SamDecoderMixin:
 class SamRunner(_SamDecoderMixin):
     """SAM / EdgeSAM / SlimSAM: encoder -> image_embeddings -> decoder."""
 
-    def __init__(self, encoder_path: str | Path, decoder_path: str | Path, img_size: int = SAM_IMG,
-                 letterbox: bool = False, backend: str = "CPU", threads: int = 4):
+    def __init__(
+        self,
+        encoder_path: str | Path,
+        decoder_path: str | Path,
+        img_size: int = SAM_IMG,
+        letterbox: bool = False,
+        backend: str = "CPU",
+        threads: int = 4,
+    ):
         super().__init__(letterbox=letterbox, img_size=img_size, backend=backend, threads=threads)
         self._encoder_path = str(encoder_path)
         self._decoder_path = str(decoder_path)
@@ -161,8 +174,14 @@ class SamRunner(_SamDecoderMixin):
 class Sam2Runner(_SamDecoderMixin):
     """SAM2: encoder -> high_res_feats_0/1 + image_embed -> decoder."""
 
-    def __init__(self, encoder_path: str | Path, decoder_path: str | Path, img_size: int = SAM_IMG,
-                 backend: str = "CPU", threads: int = 4):
+    def __init__(
+        self,
+        encoder_path: str | Path,
+        decoder_path: str | Path,
+        img_size: int = SAM_IMG,
+        backend: str = "CPU",
+        threads: int = 4,
+    ):
         super().__init__(letterbox=True, img_size=img_size, backend=backend, threads=threads)
         self._encoder_path = str(encoder_path)
         self._decoder_path = str(decoder_path)
@@ -178,7 +197,11 @@ class Sam2Runner(_SamDecoderMixin):
         self._orig_shape = image_bgr.shape[:2]
         tensor, self._ratio = preprocess_sam_letterbox(image_bgr, self._img_size)
         out = self._encoder.run({"image": tensor})
-        self._image_embed, self._hr0, self._hr1 = out["image_embed"], out["high_res_feats_0"], out["high_res_feats_1"]
+        self._image_embed, self._hr0, self._hr1 = (
+            out["image_embed"],
+            out["high_res_feats_0"],
+            out["high_res_feats_1"],
+        )
 
     def _run_decoder(self, point_coords, point_labels) -> list[SamOnnxResult]:
         decoder = self._new_decoder()
@@ -237,7 +260,9 @@ class Sam3Runner:
         # the text encoder is a 1.4GB fp32 model whose compute is trivial; keep it on
         # CPU to spare GPU memory for the detector
         self._text_enc_model = OrtSession(str(d / "sam3_text_encoder.onnx"), backend="CPU", threads=threads)
-        self._geo_enc_model = OrtSession(str(d / "sam3_geometry_encoder.onnx"), backend=backend, threads=threads)
+        self._geo_enc_model = OrtSession(
+            str(d / "sam3_geometry_encoder.onnx"), backend=backend, threads=threads
+        )
         self._detector_model = OrtSession(str(d / "sam3_detector.onnx"), backend=backend, threads=threads)
         self._tokenizer = None
         if (d / "vocab.json").exists() and (d / "merges.txt").exists():
@@ -351,14 +376,18 @@ class Sam3Runner:
                 }
             )
             scores = pcs_scores(pred["pred_logits"], pred["presence"])
-            masks, boxes_n, sc, _cls = pcs_filter_nms(pred["pred_boxes"], pred["pred_masks"], scores, self.conf, self.iou)
+            masks, boxes_n, sc, _cls = pcs_filter_nms(
+                pred["pred_boxes"], pred["pred_masks"], scores, self.conf, self.iou
+            )
             H, W = self._orig_shape
             for m, b, s in zip(masks, boxes_n, sc):
                 up = upscale_mask(m, (H, W))
                 debug_save.save_image("03_raw_mask", m, prompt_scale=(m.shape[1] / W, m.shape[0] / H))
                 debug_save.save_image("04_final_mask", up)
                 box_px = (b[0] * W, b[1] * H, b[2] * W, b[3] * H)
-                all_results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(s), box=tuple(box_px)))
+                all_results.append(
+                    SamOnnxResult(mask=up.astype(np.float32), score=float(s), box=tuple(box_px))
+                )
         return all_results
 
     def _encode_text(self, text: str):

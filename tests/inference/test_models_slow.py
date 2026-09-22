@@ -11,8 +11,8 @@ import shutil
 
 import pytest
 
-from app.sam_ort import Predictor
-from app.sam_ort.runner import Sam3Runner
+from inference.sam_ort import Predictor
+from inference.sam_ort.runner import Sam3Runner
 
 pytestmark = pytest.mark.slow
 

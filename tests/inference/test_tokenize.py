@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from app.sam_ort.tokenize import CONTEXT_LENGTH, SimpleTokenizer
+from inference.sam_ort.tokenize import CONTEXT_LENGTH, SimpleTokenizer
 
 VOCAB = "assets/onnx/vocab.json"
 MERGES = "assets/onnx/merges.txt"

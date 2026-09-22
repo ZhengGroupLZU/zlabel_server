@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from app.sam_ort.postprocess import (
+from inference.sam_ort.postprocess import (
     contour_filter,
     nms,
     nms_filter,
@@ -57,6 +57,7 @@ class TestPcs:
         logits = np.array([[2.0], [-2.0], [0.0]], np.float32)
         presence = np.array([[1.0]], np.float32)
         scores = pcs_scores(logits, presence)
+
         def s(x):
             return 1.0 / (1.0 + np.exp(-x))
 
@@ -109,7 +110,7 @@ class TestUpscaleMaskPad:
 
     def test_padding_fraction_matches_letterbox(self, img_bgr):
         # build the mask from a letterboxed image region, then verify the crop math
-        from app.sam_ort.preprocess import preprocess_sam_letterbox
+        from inference.sam_ort.preprocess import preprocess_sam_letterbox
 
         tensor, r = preprocess_sam_letterbox(img_bgr, 1024)
         content_h = round(img_bgr.shape[0] * r)
@@ -141,13 +142,17 @@ class TestContourHelpers:
     def test_reduce_contour_points(self):
         # a 360-gon: approxPolyDP should reduce the point count substantially
         angles = np.linspace(0, 2 * np.pi, 360, endpoint=False)
-        contour = np.stack([200 * np.cos(angles), 200 * np.sin(angles)], axis=1).astype(np.int32).reshape(-1, 1, 2)
+        contour = (
+            np.stack([200 * np.cos(angles), 200 * np.sin(angles)], axis=1).astype(np.int32).reshape(-1, 1, 2)
+        )
         simplified = reduce_contour_points(contour, min_points=5, max_points=100)
         assert 4 <= len(simplified) <= 100
 
     def test_smooth_contour(self):
         # a jagged square outline; smoothing keeps the same layout and count
-        contour = np.array([[0, 0], [0, 4], [0, 8], [4, 8], [8, 8], [8, 4], [8, 0], [4, 0]], np.int32).reshape(-1, 1, 2)
+        contour = np.array(
+            [[0, 0], [0, 4], [0, 8], [4, 8], [8, 8], [8, 4], [8, 0], [4, 0]], np.int32
+        ).reshape(-1, 1, 2)
         smoothed = smooth_contour(contour, window=3)
         assert smoothed.shape == contour.shape
         assert smoothed.dtype == np.int32

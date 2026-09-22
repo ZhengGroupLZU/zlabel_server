@@ -45,12 +45,8 @@ def bbox_overlaps(
         bboxes1, bboxes2 = bboxes2, bboxes1
         ious = np.zeros((cols, rows), dtype=np.float32)
         exchange = True
-    area1 = (bboxes1[:, 2] - bboxes1[:, 0] + extra_length) * (
-        bboxes1[:, 3] - bboxes1[:, 1] + extra_length
-    )
-    area2 = (bboxes2[:, 2] - bboxes2[:, 0] + extra_length) * (
-        bboxes2[:, 3] - bboxes2[:, 1] + extra_length
-    )
+    area1 = (bboxes1[:, 2] - bboxes1[:, 0] + extra_length) * (bboxes1[:, 3] - bboxes1[:, 1] + extra_length)
+    area2 = (bboxes2[:, 2] - bboxes2[:, 0] + extra_length) * (bboxes2[:, 3] - bboxes2[:, 1] + extra_length)
     for i in range(bboxes1.shape[0]):
         x_start = np.maximum(bboxes1[i, 0], bboxes2[:, 0])
         y_start = np.maximum(bboxes1[i, 1], bboxes2[:, 1])
