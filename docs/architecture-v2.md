@@ -1,0 +1,225 @@
+# ZLabel Server v2 — 架构设计
+
+> 状态：设计已定，实现中。v1（分支 `onnx`，提交 `fc04ef4`）为参考实现，保持可运行。
+
+## 1. 目标与非目标
+
+**目标**：把标注服务端从"单用户脚本式后端"升级为**多用户生产系统**：任务领取与租约、提交/复核状态机、角色权限与审计、按人统计、服务端标签管理、推理与 API 解耦（不再有"全局当前帧"），并且 HTTP 契约有版本、可灰度、可回滚。
+
+**非目标（v2 不做）**：不做 Web 前端；不改桌面端的本地（离线）模式；不替换 OpenList 作为文件存储；不引入 Postgres/Redis 等外部中间件（保持单机可部署，但边界留好）。
+
+## 2. 已确认的四项决策
+
+| # | 决策 | 理由 |
+|---|---|---|
+| D1 | **OpenList 作身份源 + 服务端签发 session**：登录仍用 OpenList 账号，服务端查 OpenList 校验后签发自己的 token，`users` 表按 OpenList 用户 id 存角色/统计，并把该用户的 OpenList token 存在会话里用于文件访问 | 保留 OpenList 的按用户 ACL；同时获得本地角色/领取/审计能力；桌面端登录字段不变 |
+| D2 | **新增 `/api/v2` + 保留 `/api/v1` 兼容层** | 旧桌面端在 v2 开发期继续可用；可逐端点灰度、可对比、可回滚 |
+| D3 | **推理独立进程 + 队列** | 消除"全局当前帧"错帧 bug；API 重启不影响模型；GPU 排队不占 API worker；可水平扩 GPU |
+| D4 | **领取制 + 复核状态机** | 多人协作不撞车（租约自动过期）；复核可退回；进度按状态统计 |
+
+## 3. 目录结构
+
+v1 冻结不再改（`app/` 保留原样，只允许修 bug），v2 全部在 `v2/`，两者由同一个 FastAPI app 挂载：
+
+```
+app/                     # v1：冻结参考实现（/api/v1 的语义基准）
+v2/
+  main.py                # FastAPI 装配（include v2 routers + v1 兼容 router）+ lifespan
+  core/
+    config.py            # pydantic-settings，ZLV2_* 前缀
+    logging.py           # 结构化日志 + request id
+    errors.py            # 统一错误模型 {code, message, detail}
+    security.py          # session 签发/校验、角色依赖（require_user / require_role）
+  db/
+    base.py              # engine/session 工厂
+    models.py            # SQLAlchemy 模型（见 §4）
+    repositories/        # 每个聚合一个仓库（projects/tasks/annotations/users/labels/audit）
+    migrations/          # alembic
+  adapters/
+    openlist.py          # 唯一出口：包装 app/openlist_api（vendored SDK）+ 服务账号/token 注入
+    inference.py         # InferenceClient（HTTP 调推理进程）
+  services/
+    auth_service.py      # 登录、会话、角色引导（首个用户=admin）
+    project_service.py   # 项目发现/创建/同步、标签 CRUD
+    task_service.py      # 任务列表、分组解析、领取/释放/心跳、提交/复核
+    annotation_service.py# 读写标注、版本历史、冲突检测
+    stats_service.py     # 进度、按人统计
+  api/v2/
+    auth.py projects.py tasks.py annotations.py images.py predict.py labels.py health.py
+  contracts/             # 与桌面端共享的线格式（AutoMode/ReturnType/SamReturn/Point/Rect/Polygon）
+  schemas/               # 请求/响应模型（pydantic v2）
+  inference_worker/      # 独立进程的 entrypoint（挂 sam_ort/worker/ztypes）
+inference/               # 从 app/ 原样搬来的推理资产（sam_ort/、worker.py、ztypes.py、bbox_overlaps.py）
+docs/
+  architecture-v2.md     # 本文
+  client-migration-v2.md # 桌面端改造清单
+```
+
+## 4. 领域模型与 DB schema
+
+**全新数据库**（`ZLV2_DATABASE_URL`，默认 `data/zlabel_server_v2.db`）：
+v2 **不迁移、不导入 v1 数据**（旧项目不保留；任务表本来就能由 OpenList 重扫重建）。
+v1 的 `zlabel_server.db` 留给旧服务端（M4 双跑对比需要两者并存）。
+schema 由 **alembic** 管理（`uv run alembic upgrade head`），首次即建全量 v2 表：
+
+```
+users            id, oplist_user_id(uniq), name(uniq, lower), email, role[annotator|reviewer|admin],
+                 active, created_at, last_login_at, finished_count
+sessions         id, token_hash(uniq), user_id, oplist_token, created_at, expires_at, revoked_at, client_info
+projects         id, name(uniq, = OpenList 目录名), display_name, description, active, marker_ok,
+                 created_at, updated_at
+labels           id, project_id, name, color, sort, archived, created_at   (uniq(project_id,name))
+tasks            id, project_id, anno_id(uniq), path(OpenList 绝对路径), rel_path, group_name, day,
+                 state[draft|submitted|approved|rejected], missing,
+                 claimed_by, claimed_at, lease_expires_at,
+                 submitted_at, reviewed_by, reviewed_at, review_note, updated_at
+annotations      id, task_id(uniq), anno_id, version(int), author_id, path, labels_json, hash, created_at, updated_at
+annotation_versions  id, task_id, version, author_id, path, labels_json, created_at, note   (历史)
+link_task_label  (task_id, label_id)      # 保留，v1 兼容读
+link_task_user   (task_id, user_id)       # 保留
+audit_log        id, ts, user_id, action, target_type, target_id, detail_json
+```
+
+要点：
+
+- **`tasks.anno_id` 公式不变**：`md5("<project>/<project-relative posix path>")`。历史标注与桌面端本地镜像必须继续对得上。
+- **标注文件仍在 OpenList**（`{proj_dir}/{project}/zlabel/{anno_id}.zlabel`），DB 只存元数据/版本/哈希 → 与桌面端镜像互通不变。
+- `tasks.rel_path` 是**项目内相对路径**（`images/a/D1.png`），`tasks.path` 是 OpenList 绝对路径；`get_image` 一律走 `project + rel_path`，修掉 v1 的 `get_image` 忽略 `project` 的口径问题。
+- `tasks.group_name/day` 由服务端解析（规则见 §9），客户端不再靠文件名硬猜。
+- 领取即租约：`claimed_by/claimed_at/lease_expires_at`；保存成功或提交时自动续租/释放。
+- 索引：`tasks(project_id,state)`、`tasks(project_id,group_name,day)`、`tasks(anno_id)`、`sessions(token_hash)`、`audit_log(ts)`。
+
+## 5. 任务状态机
+
+```
+                claim                 submit                approve
+  (none) ──────────────▶ claimed ──────────────▶ submitted ──────────────▶ approved
+    ▲      lease TTL 到期/ release        ▲                 │ reject
+    │                                     └─────────────────┘
+    └──────────────── reviewer/admin 强制释放 ────────────────┘
+```
+
+- `POST /api/v2/tasks/{anno_id}/claim` → 200（我是持有者）/ 409（他人持有，带 `claimed_by/lease_expires_at`）；`force=true` 仅 reviewer/admin。
+- 保存标注会自动 `claim + 续租`（幂等）；租约 TTL 默认 30 分钟，客户端每 10 分钟心跳。
+- `submit` 把 `draft → submitted`（annotator 即可）；`review` 支持 `approve|reject`（reviewer/admin），`reject` 必须带 note，退回 `draft` 并清空领取。
+- 进度：`{total, draft, submitted, approved, rejected}`，可 `by_user=true` 按人统计。
+
+## 6. API v2 契约（摘要）
+
+统一响应：成功直接返回资源对象（**不再有 `{message, data}` 信封**）；错误统一 `{code, message, detail}`，`code` 为机器可读枚举（`unauthorized`/`forbidden`/`not_found`/`conflict`/`lease_conflict`/`validation_error`/`upstream_error`）。
+
+| 方法与路径 | 权限 | 说明 |
+|---|---|---|
+| `POST /api/v2/auth/login` | — | body `{username,password,client}` → `{token,expires_at,user{id,name,role}}` |
+| `GET /api/v2/auth/me` | session | 当前用户 + 角色 + 统计 |
+| `POST /api/v2/auth/logout` | session | 撤销当前会话 |
+| `GET /api/v2/health` | — | `{db, openlist, inference, version, capabilities[]}`（能力探测用） |
+| `GET /api/v2/projects` | session | 项目列表（含我的进度） |
+| `POST /api/v2/projects` | admin/reviewer | 建项目（OpenList 目录 + 标记文件） |
+| `PATCH /api/v2/projects/{p}` | admin/reviewer | 描述/显示名/启停 |
+| `POST /api/v2/projects/{p}/scan` | reviewer/admin | 重扫 OpenList 同步任务（替代 `refresh_tasks`） |
+| `GET/POST/PATCH/DELETE /api/v2/projects/{p}/labels[/{id}]` | 读 session / 写 reviewer+ | 标签 CRUD（名字、颜色、排序、归档） |
+| `GET /api/v2/projects/{p}/tasks` | session | `state,claim,group,mine,limit,cursor,order=id\|sequence` |
+| `POST /api/v2/tasks/{anno_id}/claim\|release\|heartbeat` | session | 领取/释放/续租 |
+| `POST /api/v2/tasks/{anno_id}/submit` | 持有者 | 提交复核 |
+| `POST /api/v2/tasks/{anno_id}/review` | reviewer/admin | `{decision: approve\|reject, note}` |
+| `GET /api/v2/projects/{p}/groups` | session | 序列分组 + 帧列表（时间轴/拷贝上一帧用，服务端给全量，不受分页截断） |
+| `GET /api/v2/projects/{p}/images/{rel_path:path}` | session | 取图，支持 `ETag`/`If-None-Match`；**无副作用（不再设置模型图）** |
+| `PUT /api/v2/projects/{p}/images/{rel_path:path}` | session | 本地上传（本地数据集 + 远端推理） |
+| `GET /api/v2/projects/{p}/annotations/{anno_id}` | session | 200 + `ETag: v{n}` / 404 = 未标注 |
+| `PUT /api/v2/projects/{p}/annotations/{anno_id}` | 持有者 | body 含 `base_version`；200 `{version}` / 409 冲突（`server_version, updated_by, updated_at`）/ `force=true` 仅 reviewer+ |
+| `GET /api/v2/projects/{p}/annotations/{anno_id}/versions` | session | 版本历史（v2 起，历史从新版本号开始累积） |
+| `POST /api/v2/projects/{p}/predict` | session | 交互/文本推理，**无状态**：`{image_sha256 or image, points/labels, rects, texts, threshold, mode, return_type, crop_box}` |
+| `GET /api/v2/projects/{p}/progress` | session | `{total,draft,submitted,approved,rejected}`，`by_user=true` 时带按人明细 |
+
+错误码约定：`404 not_found`（未标注/未找到，客户端可安全新建）、`409 conflict`（版本冲突或任务被他人领取，`detail.claimed_by` 区分）、`502 upstream_error`（OpenList/推理进程失败）、`503 inference_unavailable`。
+
+## 7. 鉴权与会话
+
+1. 客户端 `POST /api/v2/auth/login`（字段与现在一致：用户名/密码）。
+2. 服务端调 OpenList `auth.login` 校验 → 取用户 id/name → `upsert users`（**首个用户自动 admin**，其余默认 annotator；可由 admin 改角色）。
+3. 生成 32 字节随机 token（DB 只存 `sha256`），TTL 30 天；把该用户的 OpenList token 存入 `sessions.oplist_token`。
+4. 后续请求 `Authorization: Bearer <token>` → `require_user` 依赖解析会话（60s 内存缓存命中校验），得到 `User` + 可用于 FS 的 OpenList token。
+5. OpenList 侧 token 失效 → FS 调用返回 401 `session_stale`，客户端重新登录（服务端**不保存密码**）。
+6. 角色矩阵：`annotator` 领取/保存/提交自己的任务；`reviewer` 额外可 `force` 释放、复核、扫描、标签写；`admin` 额外可建项目、改角色。
+
+## 8. 推理服务（独立进程）
+
+```
+桌面端 ─▶ POST /api/v2/projects/{p}/predict ─▶ InferenceClient ─HTTP(内部 token)─▶ inference worker
+                                                  │                                 ├─ 模型（sam_ort/，原样搬）
+                                                  └─ 取图（OpenList，按需）           ├─ embedding 缓存（key=image sha256）
+                                                                                    └─ 单/多 GPU 队列
+```
+
+- job：`{job_id, image_sha256, image_ref|image_b64, prompts, threshold, mode, return_type, crop_box, model}`；同步等待（HTTP，超时可配），worker 内部串行或按 GPU 并发。
+- **embedding 缓存 key = 图像内容 sha256**（跨项目去重），LRU + 可配容量；同一张图第二次点击直接复用 embedding → 从根上消除 v1"全局当前帧"错帧问题。
+- worker 暴露 `GET /health`（模型已加载/设备/队列深度）与 `GET /metrics`（p50/p95、缓存命中率）。
+- 模型参数沿用 v1：`ZLV2_MODEL_NAME/DIR/BACKEND`、SAM3 conf/iou、轮廓后处理参数（与桌面端逐像素对齐的预处理逻辑保持不变）。
+- 降级：worker 不可达 → `503 inference_unavailable`，客户端提示"推理不可用，可继续手动标注"（不再 500）。
+
+## 9. 序列分组：由服务端解析
+
+沿用桌面端现有规则（`species/dish/D{n}.png`），在扫描时写入 `tasks.group_name/day`：
+
+- 末段匹配 `D(\d+)\.(png|jpg|jpeg)` → `day=n`；路径 ≥3 段时 `group_name = 倒数第3段/倒数第2段`，2 段时 `group_name = 倒数第2段`（与客户端 `_assign_remote_group` 完全一致）。
+- 否则回退 `(.+?)[_\- ]*(\d+)\.(ext)` → `group_name=前缀, day=序号`；都不匹配则 `group_name="", day=0`。
+- v2 客户端直接用服务端字段，删除客户端的文件名猜测；v1 兼容层保持旧返回（不带 group/day）。
+
+## 10. v1 兼容层
+
+`/api/v1/*` 全部保留，只做两件事：
+
+1. **鉴权适配**：`Authorization` 里若是 OpenList token（v1 客户端行为），自动为该用户建立/复用一条 `sessions`（`client_info="v1-compat"`），后续走同一套服务层；若已是 v2 session token 则直接使用。
+2. **序列化适配**：`{message, data}` 信封、`predict` 的 form + `data` JSON、`get_tasks` 字段名、`labels`/`how-many-finished` 旧形状。
+
+顺带修掉 v1 两个已确认的不一致（不破坏旧客户端）：
+
+- `refresh_tasks`：`username/password` 改为可选，改用会话鉴权，保留 `force`。
+- `get_image`：新增可选 `project`；`name` 为相对路径时按项目拼路径（绝对路径行为不变）。
+
+## 11. 可观测性与运维
+
+- 结构化日志 + `X-Request-ID`；`audit_log` 记录领取/提交/复核/强制覆盖/标签变更。
+- `GET /api/v2/health` 汇总 DB / OpenList / 推理进程；`/metrics` 暴露推理延迟与缓存命中率。
+- `docker-compose.yml` 增加 `zlabel_inference` 服务（同镜像不同 entrypoint，共享 `assets/onnx`、保留 GPU 预留），`zlabel_server` 走内部网络访问。
+
+## 12. 迁移与灰度
+
+| 步 | 动作 | 出口标准 |
+|---|---|---|
+| M0 | v1 冻结基线（已做：`fc04ef4`） | `pytest -m "not slow"` 除真 GPU 用例全绿 |
+| M1 | v2 骨架（config/db/models/security/health）+ alembic 初始迁移 | ✅ 已完成：`/api/v2/health` 可用，`upgrade head`/`downgrade base`/`alembic check` 全绿 |
+| M2 | 服务层 + v2 端点（auth/projects/tasks/annotations/images/labels/progress）+ 假 OpenList/假推理测试 | v2 用例全绿（含 role/lease/conflict） |
+| M3 | 推理进程 + InferenceClient（embedding 缓存、health、metrics） | 重复请求命中缓存；API 重启不影响 worker |
+| M4 | v1 兼容层改由 v2 服务实现 + 双跑对比脚本（同一数据集打 v1/v2 逐字段 diff） | 桌面端现有功能在 v1 路径下行为等价 |
+| M5 | 桌面端切 v2（见 `client-migration-v2.md`），逐端点灰度 | 新客户端对 v1 路径调用数归零 |
+| M6 | 删除 v1 兼容层（v2.1），并把 `v2/` 包改名为 `app/` | 代码库只剩 v2 |
+
+回滚：任一步失败 → 桌面端 `settings.api_version=v1` 立即回到旧行为；服务端可整体回退 `onnx` 分支部署。
+
+## 13. 测试策略
+
+- **单元**：services（领取/租约/状态机/角色/冲突）、分组解析、schema 校验。
+- **API（hermetic）**：假 OpenList（沿用 `app/openlist_api` 的形状）+ 假推理；覆盖 401/403/404/409/租约/校验。
+- **契约 golden**：把桌面端真实 payload（`save_zlabel` form、`predict` 的 data JSON、`{message,data}` 响应）固化为用例，v1 兼容层逐字段通过。
+- **数值回归**：复用 `app/sam_ort` 既有用例（pre/postprocess、tokenize、worker、models_slow），推理资产搬迁后原样通过。
+- **对比测试**：v1 服务端（onnx 分支）与 v2 在同一数据集跑同一批请求，diff JSON。
+
+## 14. 验收标准（DoD）
+
+1. 两个标注员同时打开同一帧：第二个立刻拿到 409 + 持有者信息，UI 可等待/跳转；租约到期后可自动领取。
+2. 一次推理调用只依赖它自己请求的那张图（同一会话内交替预测两张图，结果与单图预测一致）。
+3. `reviewer` 可复核退回，`annotator` 不能；越权返回 403 且写入审计。
+4. 版本冲突：客户端 A 保存后，B 用旧 `base_version` 保存 → 409 带服务端版本与作者；`force` 仅 reviewer+。
+5. 进度 `{total,draft,submitted,approved,rejected}` 与任务状态一致，`by_user` 与审计一致。
+6. 推理进程挂掉/重启：存取/复核照常，仅 predict 返回 503 且客户端有可读提示。
+7. v1 兼容层：未改版的桌面端连 v2 服务器，登录/取任务/取图/读写标注/推理全部照常。
+8. 除真 GPU 用例外的测试全绿；alembic 可从空库升到最新。
+
+## 15. 已知风险
+
+- **OpenList token 生命周期**：会话保存用户 token，OpenList 侧过期/改密会导致 FS 401，需客户端重新登录（已定义 `session_stale`）。
+- **SQLite 写并发**：领取/提交是短事务，<50 人够用；上多副本需换 Postgres（仓库层已隔离，切换成本可控）。
+- **SAM3 显存**：vision arena ~7GB 不回收，worker 每帧建/销 session 的既有策略必须逐行保留。
+- **兼容层腐化**：M6 必须真的执行，否则 v1 适配代码长期堆积。

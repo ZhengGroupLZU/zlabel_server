@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "alembic>=1.20.0",
     "fastapi-users>=15.0.1",
     "fastapi[standard]>=0.115.12",
     "numpy>=2.2.5",
@@ -20,14 +21,16 @@ dependencies = [
 ]
 
 [[tool.uv.index]]
-name = "tsinghua"
-url = "https://mirrors.ustc.edu.cn/pypi/simple"
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple"
 
 [tool.uv]
 python-install-mirror = "https://gh-proxy.com/https://github.com/astral-sh/python-build-standalone/releases/download"
 
 [tool.ruff]
 line-length = 110
+# alembic autogenerates files with its own (dated) template style
+extend-exclude = ["v2/db/migrations"]
 
 [tool.ruff.lint]
 select = [
@@ -58,6 +61,7 @@ dev = [
     "pycocotools>=2.0.10",
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
+    "ruff>=0.6",
 ]
 
 [tool.pytest.ini_options]
