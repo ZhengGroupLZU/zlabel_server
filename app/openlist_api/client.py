@@ -8,7 +8,7 @@ from typing import Any
 
 import requests
 
-from .exceptions import OpenListAPIError
+from .exceptions import NotFoundError, OpenListAPIError
 
 
 class BaseClient:
@@ -85,10 +85,36 @@ class BaseClient:
             reason = "Unknown Error"
 
         if 400 <= status_code <= 600:
+            # OpenList reports a missing object as code=500 + "object not found"
+            # (often with HTTP 200): callers rely on a 404 for "not there yet"
+            if "not found" in str(reason).lower():
+                raise NotFoundError(str(reason), status_code=404, response=response)
             raise OpenListAPIError(reason, status_code=status_code, response=response)
 
+    @staticmethod
+    def _to_openlist_error(response: requests.Response) -> OpenListAPIError:
+        """Translate an HTTP error into an OpenList error.
+
+        OpenList reports a missing object as **HTTP 500** with a
+        "object not found" / "storage not found" message; callers (the desktop
+        client, the task scanner) rely on those being 404s.
+        """
+        try:
+            payload = response.json()
+            message = str(payload.get("message", "") or "")
+            code = payload.get("code") or response.status_code
+        except Exception:
+            message = (response.text or "")[:200]
+            code = response.status_code
+        if "not found" in message.lower():
+            return NotFoundError(message or "not found", status_code=404, response=response)
+        return OpenListAPIError(message or str(response.reason), status_code=code, response=response)
+
     def _handle_response(self, response: requests.Response) -> Any:
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            raise self._to_openlist_error(response) from e
         self.raise_for_status(response)
         return response.json()
 

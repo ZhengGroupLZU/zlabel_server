@@ -10,6 +10,7 @@ from urllib.parse import quote
 import requests
 
 from .client import BaseClient
+from .exceptions import NotFoundError
 from .models import (
     BaseResponse,
     DirsResponse,
@@ -168,7 +169,9 @@ class FileSystemAPI:
         file_info = self.get(path, password, page, per_page, refresh)
 
         if not file_info.data or not file_info.data.raw_url:
-            raise requests.HTTPError(f"File info not found raw_url: {file_info.model_dump_json()}")
+            # OpenList answers "failed to getobj: object not found" with data=None;
+            # callers (and the desktop client) rely on a 404 to mean "not there yet"
+            raise NotFoundError(f"not found: {path}", status_code=404)
         resp = requests.get(file_info.data.raw_url, headers={"Authorization": self.client.token})
         resp.raise_for_status()
         return resp.content

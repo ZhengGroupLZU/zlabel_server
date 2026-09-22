@@ -5,6 +5,7 @@ import traceback
 from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime
 from io import BytesIO
 
 import numpy as np
@@ -15,6 +16,7 @@ from fastapi import (
     File,
     Form,
     Header,
+    HTTPException,
     Query,
     Response,
     UploadFile,
@@ -159,8 +161,9 @@ def oplist_client_try_run(func: Callable[..., JSONResponse | Response]):
             )
         except requests.exceptions.HTTPError as e:
             logger.debug(traceback.format_exc())
+            code = getattr(e.response, "status_code", None) or status.HTTP_500_INTERNAL_SERVER_ERROR
             return JSONResponse(
-                status_code=e.response.status_code,
+                status_code=code,
                 content={"message": str(e), "data": None},
                 media_type="application/json",
             )
@@ -173,6 +176,93 @@ def oplist_client_try_run(func: Callable[..., JSONResponse | Response]):
             )
 
     return wrapper
+
+
+AUTH_CACHE_TTL_SECONDS = 60.0
+_auth_cache: dict[str, float] = {}
+
+
+async def require_user(authorization: str = Header(None)) -> str:
+    """FastAPI dependency: the request must carry a valid OpenList token.
+
+    Verification hits OpenList, so a positive result is cached briefly; that
+    keeps ``/predict`` (called once per click) cheap.
+    """
+    if not authorization:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing token")
+    now = time.monotonic()
+    if now - _auth_cache.get(authorization, 0.0) < AUTH_CACHE_TTL_SECONDS:
+        return authorization
+
+    def _check() -> bool:
+        oplist_client.set_token(authorization)
+        resp = oplist_client.auth.get_current_user()
+        return bool(resp.data and resp.data.id)
+
+    try:
+        ok = await asyncio.to_thread(_check)
+    except Exception as e:
+        logger.warning(f"Token verification failed: {e}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token") from e
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+    if len(_auth_cache) > 1024:  # keep the cache bounded
+        _auth_cache.clear()
+    _auth_cache[authorization] = now
+    return authorization
+
+
+def annotation_timestamp(anno: dict) -> datetime | None:
+    """``updated_at`` (falling back to ``created_at``) of an annotation."""
+    raw = anno.get("updated_at") or anno.get("created_at")
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+
+
+def detect_conflict(file_path: str, incoming: dict) -> dict | None:
+    """Optimistic locking: refuse to overwrite a *newer* stored annotation."""
+    try:
+        raw = oplist_client.fs.get_file_bytes(file_path)
+    except OpenListAPIError as e:
+        if e.status_code == 404:
+            return None  # nothing stored yet
+        raise
+    try:
+        existing = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None  # unreadable stored copy: let the client re-save it
+
+    incoming_ts = annotation_timestamp(incoming)
+    existing_ts = annotation_timestamp(existing)
+    if incoming_ts is None or existing_ts is None:
+        return None  # legacy annotations without timestamps
+    try:
+        newer = incoming_ts < existing_ts
+    except TypeError:  # naive vs tz-aware mix
+        return None
+    if not newer:
+        return None
+    updated_by = existing.get("updated_by") or {}
+    return {
+        "updated_at": existing_ts.isoformat(),
+        "updated_by": updated_by.get("name", "") if isinstance(updated_by, dict) else "",
+    }
+
+
+def extract_label_names(anno: dict) -> list[str]:
+    """Label names used by an annotation (client Annotation.results[*].labels)."""
+    names: list[str] = []
+    results = anno.get("results") or {}
+    for result in results.values() if isinstance(results, dict) else results:
+        for label in (result or {}).get("labels") or []:
+            name = (label or {}).get("name", "")
+            if name and name not in names:
+                names.append(name)
+    return names
 
 
 @app.get("/")
@@ -317,6 +407,15 @@ async def get_image(
             status_code=status.HTTP_200_OK,
             media_type="image/png",
         )
+    except OpenListAPIError as e:
+        # pass OpenList's status through: a missing image must be a 404 (the
+        # desktop distinguishes "not there" from "server broken")
+        logger.debug(traceback.format_exc())
+        return JSONResponse(
+            status_code=e.status_code or status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"message": str(e), "data": None},
+            media_type="application/json",
+        )
     except Exception as e:
         logger.debug(traceback.format_exc())
         return JSONResponse(
@@ -332,27 +431,52 @@ async def save_zlabel(
     username: str = Form(...),
     filename: str = Form(...),
     project: str = Form(""),
-    authorization: str = Header(None),
+    force: bool = Form(False),
+    authorization: str = Depends(require_user),
 ):
     @oplist_client_try_run
     def save_zlabel_func():
         oplist_client.set_token(authorization)
         file_path = f"{SETTINGS.zlabel_save_dir(project)}/{filename}"
-        resp = oplist_client.fs.stream_upload(file_path, BytesIO(zlabel), as_task=False)
-        if resp.code == 200 and resp.message == "success":
-            msg = {"message": "success", "data": None}
-        else:
-            msg = {"message": resp.message, "data": None}
 
-        # save to local database
-        anno = json.loads(zlabel.decode("utf-8"))
+        try:
+            anno = json.loads(zlabel.decode("utf-8"))
+        except Exception as e:
+            logger.error(f"save_zlabel invalid annotation json, {file_path=}, {e=}")
+            return JSONResponse(
+                content={"message": f"invalid annotation json: {e}", "data": None},
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                media_type="application/json",
+            )
+
+        if not force:
+            conflict = detect_conflict(file_path, anno)
+            if conflict is not None:
+                logger.info(f"save_zlabel conflict, {file_path=}, server={conflict['updated_at']}")
+                return JSONResponse(
+                    content={"message": "annotation conflict", "data": conflict},
+                    status_code=status.HTTP_409_CONFLICT,
+                    media_type="application/json",
+                )
+
+        resp = oplist_client.fs.stream_upload(file_path, BytesIO(zlabel), as_task=False)
+        if not (resp.code == 200 and resp.message == "success"):
+            # never mark the task finished when the file was not stored
+            logger.error(f"save_zlabel upload failed, {file_path=}, {resp.message=}")
+            return JSONResponse(
+                content={"message": resp.message, "data": None},
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                media_type="application/json",
+            )
+
+        # persist only after the annotation is really stored
         db.insert_link_table(
-            anno["id"],
+            anno.get("id", ""),
+            label_names=extract_label_names(anno),
             user_name=username,
         )
-
         return JSONResponse(
-            content=msg,
+            content={"message": "success", "data": None},
             status_code=status.HTTP_200_OK,
             media_type="application/json",
         )
@@ -479,18 +603,32 @@ async def get_projects():
     )
 
 
-@app.get("/api/v1/how-many-finished")
-async def how_many_finished():
-    n = db.how_many_finished()
+@app.get("/api/v1/labels")
+async def get_labels(project: str = ""):
+    """Labels attached to a project's annotations (all labels when empty)."""
     return JSONResponse(
-        content={"message": "success", "data": n},
+        content={"message": "success", "data": db.get_labels(project)},
+        status_code=status.HTTP_200_OK,
+        media_type="application/json",
+    )
+
+
+@app.get("/api/v1/how-many-finished")
+async def how_many_finished(project: str = ""):
+    """``{"finished": n, "total": m}`` for a project (or every active project)."""
+    return JSONResponse(
+        content={"message": "success", "data": db.get_progress(project)},
         status_code=status.HTTP_200_OK,
         media_type="application/json",
     )
 
 
 @app.post("/api/v1/set_image")
-async def set_image(image: UploadFile = File(...), image_name: str = Form("")):
+async def set_image(
+    image: UploadFile = File(...),
+    image_name: str = Form(""),
+    authorization: str = Depends(require_user),  # noqa: ARG001 (auth gate only)
+):
     content = await image.read()
     if image_name:
         await _cache_image(image_name, content)
@@ -509,7 +647,7 @@ async def predict_v1(
     threshold: int = Form(100),
     mode: int = Form(1),
     image_name: str = Form(...),
-    authorization: str = Header(None),
+    authorization: str = Depends(require_user),
     return_type: int = Form(1),  # RECT = 1 POLYGON = 2 RLE = 3
 ):
     if image is not None:
@@ -548,12 +686,13 @@ async def predict_v1(
 
 
 async def _set_model_image(img: bytes) -> None:
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(
-        None,
-        SAM_MODEL.set_image,
-        _to_bgr(np.asarray(Image.open(BytesIO(img)), dtype=np.uint8)),
-    )
+    """Set the model image and *wait* for the embedding.
+
+    It used to be fire-and-forget, so a predict right after a set-image raced the
+    embedding (the model could still run on the previous frame).
+    """
+    arr = _to_bgr(np.asarray(Image.open(BytesIO(img)), dtype=np.uint8))
+    await asyncio.to_thread(SAM_MODEL.set_image, arr)
 
 
 def _to_bgr(img: np.ndarray) -> np.ndarray:

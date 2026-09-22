@@ -27,10 +27,35 @@ def appmod():
         config.SETTINGS.model_name = old_name
 
 
+def _install_auth(appmod, monkeypatch) -> dict[str, str]:
+    """Stub the OpenList token check used by ``require_user``.
+
+    Also makes ``get_file_bytes`` report "not stored yet" so the save endpoint's
+    optimistic-lock lookup does not hit a real server.
+    """
+    from app.openlist_api import OpenListAPIError
+
+    class _UserData:
+        id = 1
+
+    class _UserResponse:
+        data = _UserData()
+
+    def _not_found(*_args, **_kwargs):
+        raise OpenListAPIError("not found", status_code=404)
+
+    monkeypatch.setattr(appmod.oplist_client, "set_token", lambda token: None)
+    monkeypatch.setattr(appmod.oplist_client.auth, "get_current_user", lambda: _UserResponse())
+    monkeypatch.setattr(appmod.oplist_client.fs, "get_file_bytes", _not_found)
+    appmod._auth_cache.clear()
+    return {"Authorization": "test-token"}
+
+
 @pytest.fixture
-def client(appmod, fake_predictor):
+def client(appmod, fake_predictor, monkeypatch):
     appmod.SAM_MODEL = fake_predictor
-    return TestClient(appmod.app)
+    headers = _install_auth(appmod, monkeypatch)
+    return TestClient(appmod.app, headers=headers)
 
 
 @pytest.fixture
@@ -83,6 +108,21 @@ class TestGetImage:
         assert r.status_code == 500
         body = r.json()
         assert isinstance(body.get("message"), str)
+
+
+def test_get_image_missing_is_404(client, appmod, monkeypatch):
+    """A missing image must pass the OpenList 404 through (not a 500)."""
+    from app.openlist_api.exceptions import NotFoundError
+
+    def _missing(*_args, **_kwargs):
+        raise NotFoundError("not found: /missing.png", status_code=404)
+
+    monkeypatch.setattr(appmod.oplist_client.fs, "get_file_bytes", _missing)
+    appmod.IMAGE_CACHE.clear()
+
+    r = client.get("/api/v1/get_image", params={"name": "/missing.png"})
+
+    assert r.status_code == 404
 
 
 class TestPredict:
@@ -195,15 +235,17 @@ class TestSaveZLabel:
             f"{appmod.SETTINGS.oplist_proj_dir}/{appmod.SETTINGS.oplist_proj_name}/zlabel/label.json"
         )
 
-    def test_upload_failure_propagates(self, client, appmod, monkeypatch):
+    def test_upload_failure_is_a_502_and_skips_the_db(self, client, appmod, monkeypatch):
         def boom(*_args, **_kwargs):  # noqa: ARG001
             return SimpleNamespace(code=500, message="push error")
 
+        linked: list[tuple] = []
         monkeypatch.setattr(appmod.oplist_client.fs, "stream_upload", boom)
-        monkeypatch.setattr(appmod.db, "insert_link_table", lambda *a, **k: None)
+        monkeypatch.setattr(appmod.db, "insert_link_table", lambda *a, **k: linked.append(a))
         r = self._save(client, {"username": "alice", "filename": "label.json", "project": "projX"})
-        assert r.status_code == 200
+        assert r.status_code == 502
         assert r.json()["message"] == "push error"
+        assert linked == []  # the task must stay unfinished
 
 
 class TestGetZLabel:
@@ -233,3 +275,8 @@ class TestGetZLabel:
         assert captured["path"] == (
             f"{appmod.SETTINGS.oplist_proj_dir}/{appmod.SETTINGS.oplist_proj_name}/zlabel/label.json"
         )
+
+    def test_missing_annotation_is_404(self, client):
+        """The desktop keys "not annotated yet" off 404; it must not be a 500."""
+        r = client.get("/api/v1/get_zlabel", params={"name": "x.zlabel", "project": "projA"})
+        assert r.status_code == 404

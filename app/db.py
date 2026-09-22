@@ -69,6 +69,9 @@ class Task(Base):
     filename: Mapped[str]
     labels: Mapped[list["Label"]] = relationship(secondary=link_task_label, back_populates="tasks")
     finished: Mapped[bool]
+    # the file disappeared from OpenList: keep the row (annotation history) but
+    # stop offering the task
+    missing: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     users: Mapped[list["User"]] = relationship(secondary=link_task_user, back_populates="tasks")
 
     def __repr__(self) -> str:
@@ -97,12 +100,31 @@ class User(Base):
         return f"User(id={self.id}, name={self.name}, finished_count={self.finished_count})"
 
 
+def _ensure_db_parent() -> None:
+    """SQLite cannot create the file when its directory does not exist yet."""
+    url = SETTINGS.database_url
+    if url and ":memory:" not in url:
+        Path(url).parent.mkdir(parents=True, exist_ok=True)
+
+
+_ensure_db_parent()
 engine = create_engine(f"sqlite+pysqlite:///{SETTINGS.database_url}")
 session_maker = sessionmaker(engine, expire_on_commit=False)
 
 
 def id_md5(s: str) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()
+
+
+def anno_id_for(project_name: str, filename: str, rel_base_path: Path) -> str:
+    """Canonical annotation id, shared with the ZLabel desktop client.
+
+    ``md5("<project>/<project-relative posix path>")``; POSIX separators matter
+    because Windows ``Path.relative_to`` would otherwise produce backslashes and
+    the two sides would disagree.
+    """
+    rel = Path(filename).relative_to(rel_base_path).as_posix()
+    return id_md5(f"{project_name}/{rel}")
 
 
 def create_or_update_projects(projects: list[dict[str, str | list[str]]]):
@@ -130,8 +152,6 @@ def create_or_update_projects(projects: list[dict[str, str | list[str]]]):
         for project in projects:
             project_files: list[str] = project["files"]  # type: ignore
             project_name: str = project["name"]  # type: ignore
-            if not project_files:
-                continue
 
             query = select(Project).where(Project.name == project_name)
             project_id = session.scalars(query).first()
@@ -146,18 +166,27 @@ def create_or_update_projects(projects: list[dict[str, str | list[str]]]):
                         [
                             {
                                 "project_id": project_id.id,
-                                "anno_id": id_md5(
-                                    f"{project_name}/{Path(filename).relative_to(rel_base_path)}"
-                                ),
+                                "anno_id": anno_id_for(project_name, filename, rel_base_path),
                                 "filename": filename,
                                 "finished": False,
+                                "missing": False,
                             }
                             for filename in project_files[i : i + batch]
                         ]
                     )
-                    .on_conflict_do_nothing()
+                    .on_conflict_do_update(
+                        index_elements=["anno_id"],
+                        set_={"missing": False, "project_id": project_id.id},
+                    )
                 )
                 session.execute(stmt_task)
+
+            # whatever the scan did not see again is gone from OpenList
+            scanned = [anno_id_for(project_name, f, rel_base_path) for f in project_files]
+            mark_missing = update(Task).where(Task.project_id == project_id.id)
+            if scanned:
+                mark_missing = mark_missing.where(Task.anno_id.not_in(scanned))
+            session.execute(mark_missing.values(missing=True))
 
         session.commit()
 
@@ -220,7 +249,14 @@ def user_finished_count_plus(name: str):
         session.commit()
 
 
-def insert_link_table(anno_id: str, label_name: str = "", user_name: str = ""):
+def insert_link_table(anno_id: str, label_names: str | list[str] = (), user_name: str = ""):
+    """Mark a task as annotated: link its labels, the user, and set ``finished``.
+
+    Unknown label names create ``Label`` rows; users are lower-cased so one
+    person cannot appear twice, and repeated saves never duplicate links.
+    """
+    names = [label_names] if isinstance(label_names, str) else [n for n in label_names if n]
+    user_name = (user_name or "").strip().lower()
     with session_maker() as session:
         if session is None:
             return
@@ -228,20 +264,41 @@ def insert_link_table(anno_id: str, label_name: str = "", user_name: str = ""):
         if task is None:
             return
 
-        label = session.scalar(select(Label).where(Label.name == label_name))
-        if label is not None:
-            stmt = insert(link_task_label).values({"task_id": task.id, "label_id": label.id})
-            session.execute(stmt)
-        user = session.scalar(select(User).where(User.name == user_name))
-        if user is None:
-            session.execute(insert(User).values(name=user_name))
-            user = session.scalar(select(User).where(User.name == user_name))
-        assert user is not None
+        for name in names:
+            label = session.scalar(select(Label).where(Label.name == name))
+            if label is None:
+                session.execute(insert(Label).values(name=name, color="#000000"))
+                label = session.scalar(select(Label).where(Label.name == name))
+            if label is None:
+                continue
+            link = session.scalar(
+                select(link_task_label).where(
+                    (link_task_label.c.task_id == task.id) & (link_task_label.c.label_id == label.id)
+                )
+            )
+            if link is None:
+                session.execute(insert(link_task_label).values({"task_id": task.id, "label_id": label.id}))
 
-        stmt = insert(link_task_user).values({"task_id": task.id, "user_id": user.id})
-        session.execute(stmt)
-        if task.finished is False:
-            user.finished_count += 1
+        if user_name:
+            user = session.scalar(select(User).where(User.name == user_name))
+            if user is None:
+                session.execute(insert(User).values(name=user_name))
+                user = session.scalar(select(User).where(User.name == user_name))
+            if user is not None:
+                link = session.scalar(
+                    select(link_task_user).where(
+                        (link_task_user.c.task_id == task.id) & (link_task_user.c.user_id == user.id)
+                    )
+                )
+                if link is None:
+                    session.execute(
+                        insert(link_task_user).values({"task_id": task.id, "user_id": user.id})
+                    )
+                if task.finished is False:
+                    user.finished_count += 1
+                    task.finished = True
+
+        if not user_name and task.finished is False:
             task.finished = True
         session.commit()
 
@@ -263,7 +320,9 @@ def get_tasks(
             return []
         # only expose tasks belonging to active projects
         query = (
-            select(Task).join(Project, Task.project_id == Project.id).where(Project.active == True)  # noqa: E712
+            select(Task)
+            .join(Project, Task.project_id == Project.id)
+            .where(Project.active == True, Task.missing == False)  # noqa: E712
         )
         if project > -1:
             query = query.where(Task.project_id == project)
@@ -332,13 +391,56 @@ def sync_projects_from_scan(
     deactivate_projects(present_dirs, confirmed_missing)
 
 
-def how_many_finished() -> int:
+def get_labels(project: str = "") -> list[dict]:
+    """Labels used by a project's annotations (all labels when ``project`` is empty)."""
     with session_maker() as session:
         if session is None:
-            return 0
-        query = select(func.count()).select_from(Task).where(Task.finished == True)
-        result = session.scalar(query)
-        return result or 0
+            return []
+        if project:
+            query = (
+                select(Label)
+                .join(link_task_label, link_task_label.c.label_id == Label.id)
+                .join(Task, Task.id == link_task_label.c.task_id)
+                .join(Project, Project.id == Task.project_id)
+                .where(
+                    Project.name == project,
+                    Project.active == True,  # noqa: E712
+                    Task.missing == False,  # noqa: E712
+                )
+                .distinct()
+                .order_by(Label.name)
+            )
+        else:
+            query = select(Label).order_by(Label.name)
+        return [
+            {"id": label.id, "name": label.name, "color": label.color}
+            for label in session.scalars(query).all()
+        ]
+
+
+def get_progress(project: str = "") -> dict[str, int]:
+    """``{"finished": n, "total": m}`` for a project (or every active project)."""
+    with session_maker() as session:
+        if session is None:
+            return {"finished": 0, "total": 0}
+        base = select(func.count()).select_from(Task).join(Project, Task.project_id == Project.id)
+        total_q = base.where(Project.active == True, Task.missing == False)  # noqa: E712
+        done_q = base.where(
+            Project.active == True,  # noqa: E712
+            Task.missing == False,  # noqa: E712
+            Task.finished == True,  # noqa: E712
+        )
+        if project:
+            total_q = total_q.where(Project.name == project)
+            done_q = done_q.where(Project.name == project)
+        return {
+            "finished": session.scalar(done_q) or 0,
+            "total": session.scalar(total_q) or 0,
+        }
+
+
+def how_many_finished() -> int:
+    return get_progress("")["finished"]
 
 
 def get_task_by_anno_id(anno_id: str) -> Task | None:
@@ -361,7 +463,10 @@ def _ensure_schema() -> None:
         cols = [row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))]
         if "active" not in cols:
             conn.execute(text("ALTER TABLE projects ADD COLUMN active BOOLEAN NOT NULL DEFAULT 1"))
-            conn.commit()
+        cols = [row[1] for row in conn.execute(text("PRAGMA table_info(tasks)"))]
+        if "missing" not in cols:
+            conn.execute(text("ALTER TABLE tasks ADD COLUMN missing BOOLEAN NOT NULL DEFAULT 0"))
+        conn.commit()
 
 
 Base.metadata.create_all(engine)
