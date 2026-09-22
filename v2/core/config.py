@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -35,10 +35,12 @@ class Settings(BaseSettings):
     identity: Literal["openlist", "local"] = "openlist"
     # optional: create this admin account at startup when it does not exist yet
     bootstrap_password: str = ""
-    # where annotations live inside a project directory. The default matches the
-    # desktop's local datasets; a deployment with the old OpenList layout sets
-    # this to "zlabel" until `zlabel-server migrate-layout` has moved the files.
-    anno_dir: str = ".zlabel/annos"
+    # Where annotations live inside a project directory. Empty = pick by backend:
+    # the local backend uses ".zlabel/annos" (same layout as the desktop's dataset
+    # mode), the OpenList backend keeps the historical "zlabel" so an existing
+    # deployment does not lose sight of its annotations. Set it explicitly to
+    # switch (after `python -m v2.cli migrate-layout`).
+    anno_dir: str = ""
 
     # --- auth / sessions ---------------------------------------------------
     session_ttl_days: int = 30
@@ -87,10 +89,20 @@ class Settings(BaseSettings):
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
 
+    #: layout the local backend defaults to (identical to the desktop datasets)
+    DEFAULT_LOCAL_ANNO_DIR: ClassVar[str] = ".zlabel/annos"
+    #: layout OpenList deployments have been using since v1
+    LEGACY_ANNO_DIR: ClassVar[str] = "zlabel"
+
     @property
     def anno_dir_clean(self) -> str:
         """The annotation directory as a safe relative POSIX path."""
-        parts = [p for p in str(self.anno_dir).replace("\\", "/").split("/") if p not in ("", ".")]
+        configured = str(self.anno_dir or "")
+        if not configured:
+            configured = (
+                self.DEFAULT_LOCAL_ANNO_DIR if self.storage_backend == "local" else self.LEGACY_ANNO_DIR
+            )
+        parts = [p for p in configured.replace("\\", "/").split("/") if p not in ("", ".")]
         if not parts or any(p == ".." for p in parts):
             raise ValueError(f"ZLSERVER_ANNO_DIR is not a safe relative path: {self.anno_dir!r}")
         return "/".join(parts)

@@ -22,6 +22,9 @@ def settings(tmp_path) -> Settings:
         upload_dir=str(tmp_path / "uploads"),
         oplist_host="http://openlist.test",  # never dialled: the fake client is injected
         oplist_token="service-token",  # background scan token
+        # pin the layout: the OpenList backend would otherwise default to the
+        # historical "zlabel" directory (so existing deployments keep working)
+        anno_dir=".zlabel/annos",
         inference_token="internal-secret",  # shared secret (API <-> worker)
         inference_url="",
         # deterministic tests: scanners are exercised explicitly

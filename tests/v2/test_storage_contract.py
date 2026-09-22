@@ -26,7 +26,9 @@ IMAGE = "images/dish01/D1.png"
 def backend(request, tmp_path) -> StorageBackend:
     """Both implementations, side by side."""
     if request.param == "local":
-        settings = Settings(storage_backend="local", storage_root=str(tmp_path / "storage"))
+        settings = Settings(
+            storage_backend="local", storage_root=str(tmp_path / "storage"), anno_dir=".zlabel/annos"
+        )
         settings.ensure_dirs()
         return LocalDiskBackend(settings)
     ol = FakeOpenList(service_token="service-token")
@@ -34,13 +36,34 @@ def backend(request, tmp_path) -> StorageBackend:
     ol.add_file(f"/zlabel_server/projects/{PROJ}/notes.txt", b"text")
     request.node.fake_openlist = ol
     return OpenListAdapter(
-        Settings(oplist_proj_dir="/zlabel_server/projects", oplist_token="service-token"),
+        Settings(
+            oplist_proj_dir="/zlabel_server/projects",
+            oplist_token="service-token",
+            anno_dir=".zlabel/annos",  # pinned: both backends on the same layout
+        ),
         client_factory=ol.client,
     )
 
 
 def put(backend: StorageBackend, path: str, data: bytes = b"data") -> None:
     backend.put_bytes(path, data, backend.service_token())
+
+
+def test_anno_dir_defaults_per_backend():
+    """An existing OpenList deployment keeps its historical directory.
+
+    Switching it to the shared ``.zlabel/annos`` layout is an explicit choice (set
+    ZLSERVER_ANNO_DIR) made after migrating the files, so a restart can never make
+    saved annotations invisible.
+    """
+    from v2.core.config import Settings as _Settings
+
+    assert _Settings(storage_backend="openlist").anno_dir_clean == "zlabel"
+    assert _Settings(storage_backend="local").anno_dir_clean == ".zlabel/annos"
+    assert _Settings(storage_backend="local", anno_dir="custom/annos").anno_dir_clean == "custom/annos"
+    unsafe = _Settings(anno_dir="../escape")
+    with pytest.raises(ValueError):
+        _ = unsafe.anno_dir_clean
 
 
 def test_backend_declares_its_discovery_mode(backend: StorageBackend):

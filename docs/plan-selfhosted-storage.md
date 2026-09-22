@@ -33,14 +33,14 @@
     .zlabel-server-project-root               # 兼容 OpenList 部署的标记文件（本地后端不要求）
 ```
 `anno_id = md5("<project>/<项目内相对路径>")` 不变；桌面端**按 anno_id 取文件**，所以布局变化对客户端完全透明。
-目录名可通过 `ZLSERVER_ANNO_DIR` 覆盖（旧部署先设 `zlabel` 保持兼容，搬完再改回默认）。
+目录名可通过 `ZLSERVER_ANNO_DIR` 覆盖；**留空时按后自动选择**：openlist 后端用历史上的 `zlabel`（现有部署不受影响），local 后端用 `.zlabel/annos`。搬完目录后显式设成 `.zlabel/annos`。
 
 ## 从 OpenList 迁移到本地存储（runbook）
 
 1. 把 OpenList 的数据目录挂到服务器（或 rsync 过来），设为 `ZLSERVER_STORAGE_ROOT`。
-2. **先保持** `ZLSERVER_ANNO_DIR=zlabel`、`ZLSERVER_STORAGE_BACKEND=openlist` 不动，确认服务端能读。
+2. **先保持** `ZLSERVER_STORAGE_BACKEND=openlist` 不动（`ZLSERVER_ANNO_DIR` 留空即用历史布局），确认服务端能读。
 3. `uv run python -m v2.cli migrate-layout --root <STORAGE_ROOT> --dry-run` 看计划，确认后去掉 `--dry-run`。
-4. `ZLSERVER_STORAGE_BACKEND=local`（`ZLSERVER_ANNO_DIR` 恢复默认 `.zlabel/annos`），重启 → 扫描一次（`POST /projects/scan`）即可看到全部任务。
+4. `ZLSERVER_STORAGE_BACKEND=local`（此时自动用 `.zlabel/annos`），重启 → 扫描一次（`POST /projects/scan`）即可看到全部任务。
 5. 账号：`ZLSERVER_IDENTITY=local` + `ZLSERVER_BOOTSTRAP_ADMIN/PASSWORD` 建首个管理员；之后用
    `uv run python -m v2.cli user add <名字> --role reviewer|annotator` 建人。
 6. 回滚：反向运行 `migrate-layout --source .zlabel/annos --target zlabel`，并把两个开关切回。
