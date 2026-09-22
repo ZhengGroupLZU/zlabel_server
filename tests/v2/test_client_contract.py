@@ -132,7 +132,7 @@ def test_login_carries_user_role_and_capabilities(api):
     assert api.headers["Authorization"] == f"Bearer {api.user_token}"
 
 
-def test_scan_projects_tasks_and_versions(api, ol, services):
+def test_scan_projects_tasks_and_versions(api, ol):
     _login(api)
     seed(ol, PROJ, files=("images/dish01/D1.png", "images/dish01/D2.png"))
     assert api.scan(PROJ) is True  # admin may scan
@@ -149,7 +149,7 @@ def test_scan_projects_tasks_and_versions(api, ol, services):
     assert api.version_of(first["anno_id"]) in (0, None)  # seeded from the listing
 
 
-def test_annotation_roundtrip_and_optimistic_locking(api, ol, client_api, tmp_path, services):
+def test_annotation_roundtrip_and_optimistic_locking(api, ol, client_api, tmp_path):
     _login(api)
     seed(ol, PROJ, files=("images/dish01/D1.png",))
     api.scan(PROJ)

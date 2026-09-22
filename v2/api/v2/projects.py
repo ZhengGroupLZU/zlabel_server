@@ -72,7 +72,7 @@ def scan_all(
 
 @router.post("/{project}/scan", response_model=ScanStats)
 def scan_project(
-    project: str,
+    project: str,  # noqa: ARG001 - the OpenList walk is global per root
     force: bool = Query(True),
     _auth: AuthContext = Depends(require_roles("reviewer", "admin")),
     services: Services = Depends(get_services),
