@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from tests.v2.fakes import FakeOpenList
+from tests.v2.fakes import LocalBackendHarness
 from v2.adapters.identity import (
     IdentityProvider,
     LocalIdentity,
@@ -13,7 +13,6 @@ from v2.adapters.identity import (
     hash_password,
     verify_password,
 )
-from v2.adapters.openlist import OpenListAdapter
 from v2.core.config import Settings
 from v2.core.errors import ValidationFailed
 from v2.db.models import ROLE_ADMIN, ROLE_REVIEWER, User
@@ -43,7 +42,7 @@ def test_short_passwords_are_refused():
 # region provider contract
 def test_both_providers_satisfy_the_protocol(db):
     local = LocalIdentity(db, Settings(identity="local", storage_backend="local"))
-    ol = FakeOpenList(service_token="t")
+    ol = LocalBackendHarness(service_token="t")
     remote = OpenListIdentity(OpenListAdapter(Settings(oplist_token="t"), client_factory=ol.client))
     assert isinstance(local, IdentityProvider) and isinstance(remote, IdentityProvider)
     assert local.kind == "local" and remote.kind == "openlist"
@@ -85,7 +84,7 @@ def test_password_change_and_bootstrap_mode(db):
 
 
 def test_openlist_identity_proxies_login_and_reports_bad_credentials():
-    ol = FakeOpenList(service_token="t")
+    ol = LocalBackendHarness(service_token="t")
     identity = OpenListIdentity(OpenListAdapter(Settings(oplist_token="t"), client_factory=ol.client))
     remote = identity.verify("rainy", "secret")
     assert remote is not None and remote["name"] == "rainy" and remote["token"]

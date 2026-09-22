@@ -7,9 +7,8 @@ import time
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from tests.v2.fakes import FakeOpenList
+from tests.v2.fakes import LocalBackendHarness
 from tests.v2.test_projects import seed
-from v2.adapters.openlist import OpenListAdapter
 from v2.app import create_app
 from v2.db.base import Database
 from v2.db.models import Project, Task
@@ -17,7 +16,7 @@ from v2.services.container import Services
 
 
 def test_startup_scan_populates_projects_and_tasks(settings, tmp_path):
-    ol = FakeOpenList(service_token="service-token")
+    ol = LocalBackendHarness(service_token="service-token")
     seed(ol, "projA", files=("images/dish01/D1.png", "images/dish01/D2.png"))
     # a file-backed DB: the scan runs in a worker thread, and an in-memory
     # StaticPool connection cannot be shared with it
@@ -50,7 +49,7 @@ def test_startup_scan_populates_projects_and_tasks(settings, tmp_path):
 
 def test_startup_survives_an_unreachable_openlist(settings, tmp_path):
     """A dead OpenList must not stop the API from starting."""
-    ol = FakeOpenList(service_token="service-token")
+    ol = LocalBackendHarness(service_token="service-token")
     ol.fail_on("/zlabel_server/projects", RuntimeError("openlist is down"))
     patched = settings.model_copy(
         update={

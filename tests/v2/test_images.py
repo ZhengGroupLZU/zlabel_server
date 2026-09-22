@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from tests.v2.fakes import FakeOpenList
 from tests.v2.test_projects import seed
 
 ROOT = "/zlabel_server/projects"
 
 
-def test_get_image_uses_etag_cache(client, auth_headers, ol: FakeOpenList):
+def test_get_image_uses_etag_cache(client, auth_headers, ol: LocalBackendHarness):
     seed(ol, "projA", files=("images/dish01/D1.png",))
     headers = auth_headers(client)
     client.post("/api/v2/projects/scan", headers=headers)

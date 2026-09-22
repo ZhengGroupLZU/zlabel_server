@@ -1,216 +1,123 @@
-"""An in-memory OpenList: the v2 tests never touch the network.
+"""Test doubles.
 
-Mirrors the parts of the vendored SDK the adapter uses (``auth.login``,
-``auth.get_current_user``, ``fs.dirs/get/get_file_bytes/glob/stream_upload/mkdir``)
-and raises the same exception types, so the adapter's error translation is
-exercised for real.
+``LocalBackendHarness`` seeds the real local storage tree (the backend under test)
+in the shape of the old OpenList fake, so most seeding call sites stayed unchanged.
 """
 
 from __future__ import annotations
 
-import fnmatch
-from dataclasses import dataclass
-from types import SimpleNamespace
+from pathlib import Path
 
 import numpy as np
 
-from v2.vendor.openlist_api import NotFoundError, OpenListAPIError
 
+class LocalBackendHarness:
+    """Seeds the **real** local storage root and registers test accounts.
 
-@dataclass(frozen=True)
-class Entry:
-    name: str
-    is_dir: bool
+    Kept in the shape of the old OpenList fake (``add_file``/``add_dir``/``files``/
+    ``users``) so the suite drives the backend under test instead of a simulation:
+    every write lands in ``settings.storage_root``.
+    """
 
+    VIRTUAL_ROOT = "/zlabel_server/projects"  # the layout the tests spell their paths in
 
-class FakeOpenList:
-    def __init__(
-        self,
-        users: dict[str, str] | None = None,
-        root: str = "/zlabel_server/projects",
-        service_token: str = "",
-    ) -> None:
-        self.root = root
-        self.service_token = service_token
-        self.files: dict[str, bytes] = {}
-        self.dirs: set[str] = {root}
-        self.users: dict[str, str] = dict(users or {"rainy": "secret"})
-        self.tokens: dict[str, str] = {}
-        self.calls: list[tuple[str, str]] = []
-        self.token_log: list[str] = []  # which token each authenticated call used
-        self.failures: dict[str, Exception] = {}
-        self._seq = 0
+    def __init__(self, root: Path | str) -> None:
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.files: dict[str, bytes] = _FileMap(self)
+        self.dirs: set[str] = {self.VIRTUAL_ROOT}
+        self.users: dict[str, str] = {}  # name -> password, created on first login
 
-    # region test-side helpers
+    def disk_path(self, path: str) -> Path:
+        """Map a test-facing (OpenList style, absolute) path onto the storage root."""
+        clean = str(path).replace("\\", "/")
+        if clean.startswith(self.VIRTUAL_ROOT):
+            clean = clean[len(self.VIRTUAL_ROOT) :]
+        return self.root / clean.lstrip("/")
+
     def add_file(self, path: str, data: bytes = b"data") -> str:
-        self._ensure_parents(path)
-        self.files[path] = data
+        target = self.disk_path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        self._remember_parents(path)
         return path
 
     def add_dir(self, path: str) -> str:
-        self._ensure_parents(path)
+        self.disk_path(path).mkdir(parents=True, exist_ok=True)
         self.dirs.add(path.rstrip("/"))
+        self._remember_parents(path)
         return path
-
-    def fail_on(self, path: str, exc: Exception) -> None:
-        self.failures[path] = exc
 
     def images(self) -> list[str]:
         return sorted(self.files)
 
-    def client(self, _host: str = ""):
-        return FakeClient(self)
-
-    # endregion
-
-    def _ensure_parents(self, path: str) -> None:
-        parts = path.strip("/").split("/")
+    def _remember_parents(self, path: str) -> None:
+        parts = str(path).strip("/").split("/")
         for i in range(1, len(parts)):
             self.dirs.add("/" + "/".join(parts[:i]))
 
-    def _check(self, path: str) -> None:
-        if path in self.failures:
-            raise self.failures[path]
 
-    def issue_token(self, username: str) -> str:
-        self._seq += 1
-        token = f"ol-token-{self._seq}-{username}"
-        self.tokens[token] = username
-        return token
+class _FileMap:
+    """A live view of the harness tree.
 
-    def user_of(self, token: str) -> str:
-        if token and self.service_token and token == self.service_token:
-            return "service"
-        if not token or token not in self.tokens:
-            raise OpenListAPIError("invalid token", status_code=401)
-        return self.tokens[token]
+    Keys are the virtual (OpenList style, absolute) paths the tests spell; values are
+    read from disk, so the assertions keep working on paths the *server* produced
+    (which are relative to the storage root).
+    """
 
+    def __init__(self, harness: LocalBackendHarness) -> None:
+        self._harness = harness
 
-class FakeAuth:
-    def __init__(self, ol: FakeOpenList, client: FakeClient) -> None:
-        self.ol = ol
-        self.client = client
+    def _path(self, key: str) -> Path:
+        return self._harness.disk_path(key)
 
-    def login(self, username: str, password: str, otp_code: str | None = None):
-        self.ol.calls.append(("login", username))
-        if self.ol.users.get(username) != password:
-            raise OpenListAPIError("failed find user: record not found", status_code=401)
-        token = self.ol.issue_token(username)
-        self.client.set_token(token)
-        return SimpleNamespace(data=SimpleNamespace(token=token))
+    def __getitem__(self, key: str) -> bytes:
+        path = self._path(key)
+        if not path.is_file():
+            raise KeyError(key)
+        return path.read_bytes()
 
-    def get_current_user(self):
-        user = self.ol.user_of(self.client.token)  # raises 401 when invalid
-        self.ol.calls.append(("me", user))
-        return SimpleNamespace(
-            data=SimpleNamespace(id=f"id-{user}", username=user, email=f"{user}@example.com")
+    def __setitem__(self, key: str, value: bytes) -> None:
+        path = self._path(key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(value)
+
+    def __delitem__(self, key: str) -> None:
+        path = self._path(key)
+        if not path.is_file():
+            raise KeyError(key)
+        path.unlink()
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and self._path(key).is_file()
+
+    def keys(self) -> list[str]:
+        root = self._harness.root
+        return sorted(
+            f"{self._harness.VIRTUAL_ROOT}/{p.relative_to(root).as_posix()}"
+            for p in root.rglob("*")
+            if p.is_file()
         )
 
+    def values(self) -> list[bytes]:
+        return [self[k] for k in self.keys()]
 
-class FakeFs:
-    def __init__(self, ol: FakeOpenList, client: FakeClient) -> None:
-        self.ol = ol
-        self.client = client
+    def items(self):
+        return [(k, self[k]) for k in self.keys()]
 
-    def _auth(self) -> None:
-        self.ol.user_of(self.client.token)
-        self.ol.token_log.append(self.client.token)
+    def __iter__(self):
+        return iter(self.keys())
 
-    def dirs(self, path: str, password: str = "", force_root: bool = False):
-        self._auth()
-        self.ol.calls.append(("dirs", path))
-        self.ol._check(path)
-        prefix = path.rstrip("/") + "/"
-        names = sorted(
-            {p[len(prefix) :].split("/")[0] for p in self.ol.dirs if p.startswith(prefix) and p != path}
-        )
-        return SimpleNamespace(data=[SimpleNamespace(name=n) for n in names])
+    def __len__(self) -> int:
+        return len(self.keys())
 
-    def ls(self, path: str, password: str = "", refresh: bool = False):
-        self._auth()
-        self.ol.calls.append(("ls", path))
-        self.ol._check(path)
-        if path.rstrip("/") not in self.ol.dirs:
-            raise NotFoundError(f"object not found: {path}", status_code=404)
-        prefix = path.rstrip("/") + "/"
-        entries: list[Entry] = []
-        for p in sorted(self.ol.dirs):
-            rest = p[len(prefix) :]
-            if p.startswith(prefix) and "/" not in rest:
-                entries.append(Entry(rest, True))
-        for p in sorted(self.ol.files):
-            rest = p[len(prefix) :]
-            if p.startswith(prefix) and "/" not in rest:
-                entries.append(Entry(rest, False))
-        return SimpleNamespace(data=SimpleNamespace(content=entries))
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, dict):
+            return {k: self[k] for k in self.keys()} == other
+        return NotImplemented
 
-    def glob(self, path: str, pattern: str, password: str = "", refresh: bool = False) -> list[str]:
-        self._auth()
-        self.ol.calls.append(("glob", path))
-        self.ol._check(path)
-        prefix = path.rstrip("/") + "/"
-        return [
-            p
-            for p in sorted(self.ol.files)
-            if p.startswith(prefix) and fnmatch.fnmatch(p.rsplit("/", 1)[-1], pattern)
-        ]
-
-    def get(self, path: str, password: str = "", page: int = 1, per_page: int = 0, refresh: bool = False):
-        self._auth()
-        self.ol.calls.append(("get", path))
-        self.ol._check(path)
-        if path in self.ol.files:
-            content = self.ol.files[path]
-            return SimpleNamespace(
-                data=SimpleNamespace(
-                    size=len(content), modified="2026-01-01T00:00:00Z", raw_url=f"raw://{path}"
-                )
-            )
-        if path in self.ol.dirs:
-            return SimpleNamespace(
-                data=SimpleNamespace(size=0, modified="2026-01-01T00:00:00Z", raw_url=None)
-            )
-        # OpenList reports a missing object as 200 + empty data; the SDK maps it to 404
-        raise NotFoundError(f"failed to getobj: object not found: {path}", status_code=404)
-
-    def get_file_bytes(
-        self, path: str, password: str = "", page: int = 1, per_page: int = 0, refresh: bool = False
-    ) -> bytes:
-        self._auth()
-        self.ol.calls.append(("read", path))
-        self.ol._check(path)
-        if path not in self.ol.files:
-            raise NotFoundError(f"failed to getobj: object not found: {path}", status_code=404)
-        return self.ol.files[path]
-
-    def stream_upload(self, file_path: str, file, as_task: bool = True):
-        self._auth()
-        self.ol.calls.append(("upload", file_path))
-        self.ol._check(file_path)
-        data = file.read() if hasattr(file, "read") else bytes(file)
-        self.ol.add_file(file_path, data)
-        return SimpleNamespace(code=200, message="success")
-
-    def mkdir(self, path: str):
-        self._auth()
-        self.ol.calls.append(("mkdir", path))
-        self.ol._check(path)
-        if path.rstrip("/") in self.ol.dirs:
-            raise OpenListAPIError("directory already exists", status_code=500)
-        self.ol.add_dir(path)
-        return SimpleNamespace(code=200, message="success")
-
-
-class FakeClient:
-    def __init__(self, ol: FakeOpenList) -> None:
-        self.ol = ol
-        self.token = ""
-        self.fs = FakeFs(ol, self)
-        self.auth = FakeAuth(ol, self)
-
-    def set_token(self, token: str) -> None:
-        self.token = token
-
+    def __repr__(self) -> str:
+        return f"_FileMap({self.keys()!r})"
 
 class FakeInference:
     """Stand-in for the inference worker (records jobs, returns a SamReturn)."""

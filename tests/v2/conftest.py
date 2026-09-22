@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.v2.fakes import FakeOpenList
-from v2.adapters.openlist import OpenListAdapter
+from tests.v2.fakes import LocalBackendHarness
+from v2.adapters.local_disk import LocalDiskBackend
 from v2.app import create_app
 from v2.core.config import Settings
 from v2.db.base import Database
@@ -20,10 +21,9 @@ def settings(tmp_path) -> Settings:
     return Settings(
         database_url="sqlite+pysqlite:///:memory:",
         upload_dir=str(tmp_path / "uploads"),
-        oplist_host="http://openlist.test",  # never dialled: the fake client is injected
-        oplist_token="service-token",  # background scan token
-        # pin the layout: the OpenList backend would otherwise default to the
-        # historical "zlabel" directory (so existing deployments keep working)
+        storage_backend="local",
+        storage_root=str(tmp_path / "storage"),
+        identity="local",
         anno_dir=".zlabel/annos",
         inference_token="internal-secret",  # shared secret (API <-> worker)
         inference_url="",
@@ -44,14 +44,20 @@ def db(settings: Settings) -> Iterator[Database]:
 
 
 @pytest.fixture
-def ol() -> FakeOpenList:
-    """In-memory OpenList (see tests/v2/fakes.py)."""
-    return FakeOpenList(service_token="service-token")
+def ol(settings: Settings) -> LocalBackendHarness:
+    """Seeds the storage tree the backend under test actually reads.
+
+    Named ``ol`` for history: it replaced the in-memory OpenList fake, and keeping
+    the name left ~90% of the seeding call sites untouched.
+    """
+    return LocalBackendHarness(settings.storage_root)
 
 
 @pytest.fixture
-def services(settings: Settings, db: Database, ol: FakeOpenList) -> Services:
-    return Services.build(settings, db, openlist=OpenListAdapter(settings, client_factory=ol.client))
+def services(settings: Settings, db: Database) -> Services:
+    built = Services.build(settings, db, openlist=LocalDiskBackend(settings))
+    built.auth.identity.create_user("rainy", "secret", admin=True)
+    return built
 
 
 @pytest.fixture
@@ -66,42 +72,41 @@ def client(app) -> Iterator[TestClient]:
 
 
 @pytest.fixture
-def local_settings(settings: Settings, tmp_path) -> Settings:
-    """The same app, but with the local disk backend (no OpenList for storage)."""
-    return settings.model_copy(
-        update={
-            "storage_backend": "local",
-            "storage_root": str(tmp_path / "storage"),
-            "identity": "local",
-            "oplist_token": "",  # nothing needs an OpenList credential any more
-        }
-    )
+def local_settings(settings: Settings) -> Settings:
+    """There is no other backend any more: kept so the older tests keep working."""
+    return settings
 
 
 @pytest.fixture
-def local_client(local_settings: Settings, db: Database) -> Iterator[TestClient]:
-    """A server with **no OpenList at all**: local storage + local accounts.
-
-    ``rainy``/``secret`` is created directly in the database, which is what the
-    bootstrap path does in production.
-    """
-    from v2.adapters.local_disk import LocalDiskBackend
-
-    local_settings = local_settings.model_copy(update={"identity": "local"})
-    local_settings.ensure_dirs()
-    backend = LocalDiskBackend(local_settings)
-    services = Services.build(local_settings, db, openlist=backend, identity="local")
-    services.auth.identity.create_user("rainy", "secret", admin=True)
-    with TestClient(create_app(local_settings, db, services=services)) as test_client:
+def local_client(settings: Settings, db: Database, services: Services) -> Iterator[TestClient]:
+    """Alias of :func:`client`: there is only one backend now."""
+    with TestClient(create_app(settings, db, services=services)) as test_client:
         yield test_client
 
 
 @pytest.fixture
-def auth_headers() -> callable:
-    """``login(client)`` → Authorization headers for a given account."""
+def auth_headers(ol: LocalBackendHarness) -> callable:
+    """``login(client, name, password)`` → Authorization headers.
+
+    Accounts are created on first use (``ol.users[name] = pw`` wins, else the shared
+    test password), which is what the old fake did implicitly. ``rainy`` is the
+    bootstrap admin; everybody else is an annotator.
+    """
+    created: set[str] = set()
 
     def _login(client: TestClient, username: str = "rainy", password: str = "secret") -> dict[str, str]:
-        resp = client.post("/api/v2/auth/login", json={"username": username, "password": password})
+        services_: Services = client.app.state.services
+        secret = password or ol.users.get(username) or "secret"
+        # create_user enforces a minimum length; tests happily pass short ones.
+        # "rainy" is the bootstrap admin (created by the services fixture), so its
+        # password is used verbatim.
+        stored = secret if username == "rainy" or len(secret) >= 8 else secret + "-padding"
+        if username not in created:
+            if username != "rainy":  # created (as admin) by the services fixture already
+                with contextlib.suppress(Exception):
+                    services_.auth.identity.create_user(username, stored)
+            created.add(username)
+        resp = client.post("/api/v2/auth/login", json={"username": username, "password": stored})
         assert resp.status_code == 200, resp.text
         return {"Authorization": f"Bearer {resp.json()['token']}"}
 

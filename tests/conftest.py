@@ -100,4 +100,8 @@ def _hermetic_env_file(monkeypatch):
     """Do not read ``.env.v2`` (nor any other env file) during tests."""
     for cls in (_ApiSettings, _WorkerSettings):
         monkeypatch.setattr(cls, "model_config", {**cls.model_config, "env_file": None})
+    # scanners off: a scan thread would share the single-connection test DB with
+    # the request thread and crash sqlite; tests drive scans explicitly instead
+    monkeypatch.setenv("ZLSERVER_SCAN_ON_STARTUP", "false")
+    monkeypatch.setenv("ZLSERVER_PROJECT_SCAN_INTERVAL", "0")
     yield
