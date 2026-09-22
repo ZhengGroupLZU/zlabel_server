@@ -158,8 +158,10 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 ```
 
 - job（API → worker，`POST /infer`，Bearer 内部 token）：`{job_id, anno_id, image_sha256, image_b64, model, prompts{points,labels,rects,texts}, threshold, mode, return_type, crop_box}`；同步等待（HTTP，超时 `ZLV2_INFERENCE_TIMEOUT`），worker 内部串行或按 GPU 并发。M3 可再加 `image_url` 拉取模式，避免大图重复上传。
-- **embedding 缓存 key = 图像内容 sha256**（跨项目去重），LRU + 可配容量；同一张图第二次点击直接复用 embedding → 从根上消除 v1"全局当前帧"错帧问题。
-- worker 暴露 `GET /health`（模型已加载/设备/队列深度）与 `GET /metrics`（p50/p95、缓存命中率）。
+- **embedding 缓存 key = 图像 sha256（+ crop）**：runner 暴露 `export_image_state()/import_image_state()`，把编码结果（SAM 的 `image_embeddings`、SAM2 的 `image_embed/high_res_*`、SAM3 的 `img/pcs/pvs feats`）整体快照；命中时**直接恢复**而非重算（`EmbeddingCache`，LRU，`ZLV2_EMBEDDING_CACHE_SIZE`）。同一张图第二次点击零编码，且每个 job 只可能用自己那帧的编码。
+- worker 暴露 `GET /health`（模型/设备/是否已加载/缓存与队列深度，无需鉴权）与 `GET /metrics`（jobs/errors/命中率/p50-p95/max/uptime，需内部 token）。
+- 取图两种方式：默认 `ZLV2_INFERENCE_INLINE_IMAGES=true` 随 job 内联；置 false 则 API 把帧写进内容寻址缓存并给 `image_url`，worker 在**缓存未命中时**才拉（`GET /api/v2/internal/images/{sha}`，内部 token 鉴权）。
+- `mode` 校验前置（不再 500）：点提示只接受 1(SAM)/2(CV)，框提示接受 0/1/2/3，文本只接受 1；`mode=0` 是客户端"同时勾选 SAM+OpenCV"的历史值，按旧语义交给框路径。
 - 模型参数沿用 v1：`ZLV2_MODEL_NAME/DIR/BACKEND`、SAM3 conf/iou、轮廓后处理参数（与桌面端逐像素对齐的预处理逻辑保持不变）。
 - 降级：worker 不可达 → `503 inference_unavailable`，客户端提示"推理不可用，可继续手动标注"（不再 500）。
 
@@ -201,7 +203,7 @@ v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。
 | M1 | v2 骨架（config/db/models/security/health）+ alembic 初始迁移 | ✅ 已完成：`/api/v2/health` 可用，`upgrade head`/`downgrade base`/`alembic check` 全绿 |
 | M1b | 资产搬迁（`inference/`、`v2/vendor/`）+ v1 彻底删除 + 基建/文档更新 | ✅ 已完成：`app/` 不存在，推理回归测试全绿 |
 | M2 | 服务层 + `/api/v2` 端点（auth/projects/tasks/annotations/images/labels/progress/predict）+ hermetic 测试 | ✅ 已完成：109 个 v2 用例（role/lease/conflict/版本/预测） |
-| M3 | 推理进程 + InferenceClient（embedding 缓存、health、metrics） | 重复请求命中缓存；API 重启不影响 worker |
+| M3 | 推理进程 + InferenceClient（embedding 缓存、health、metrics） | ✅ 已完成：同图重复请求零编码（快照恢复），模型在独立进程 |
 | M4 | 桌面端切 v2（见 `client-migration-v2.md`） | 客户端全部调用走 `/api/v2` |
 | M5 | 验收：DoD §14 全项通过 | 交付 |
 

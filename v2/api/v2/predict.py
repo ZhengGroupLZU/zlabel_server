@@ -67,11 +67,18 @@ async def predict(
 
     content = _resolve_image({**payload, "project": project}, image, auth, services)
     digest = sha256_bytes(content)
+    inline = services.settings.inference_inline_images
+    image_url = None
+    if not inline:
+        # the worker pulls it back from us on an embedding miss
+        services.images.put(content)
+        image_url = f"/api/v2/internal/images/{digest}"
     job = {
         "job_id": f"{project}:{payload['anno_id']}:{digest[:12]}",
         "anno_id": payload["anno_id"],
         "image_sha256": digest,
-        "image_b64": base64.b64encode(content).decode("ascii"),
+        "image_b64": base64.b64encode(content).decode("ascii") if inline else None,
+        "image_url": image_url,
         "model": payload.get("model") or None,
         "prompts": {
             "points": payload.get("points"),

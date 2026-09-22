@@ -128,3 +128,53 @@ def test_worker_unavailable_is_503(client, auth_headers, ol, services):
         headers=ctx["headers"],
     )
     assert resp.status_code == 503 and resp.json()["code"] == "inference_unavailable"
+
+
+# region internal pull path
+def test_predict_can_delegate_the_image_pull(client, auth_headers, ol, services):
+    """With inline images off, the job carries a pull URL instead of the bytes."""
+    ctx = bootstrap(client, auth_headers, ol, services)
+    services.settings.inference_inline_images = False
+    anno = ctx["items"][0]["anno_id"]
+
+    resp = client.post(
+        PREDICT,
+        data={"data": payload(anno)},
+        files={"image": ("frame.png", b"pull-me")},
+        headers=ctx["headers"],
+    )
+    assert resp.status_code == 200
+    job = ctx["inference"].jobs[-1]
+    assert job["image_b64"] is None
+    assert job["image_url"] == f"/api/v2/internal/images/{job['image_sha256']}"
+
+    # the frame the worker would pull is really served by the internal endpoint
+    internal = client.get(job["image_url"], headers={"Authorization": "Bearer internal-secret"})
+    assert internal.status_code == 200 and internal.content == b"pull-me"
+
+
+def test_internal_endpoint_is_token_gated(client, services):
+    digest, _ = services.images.put(b"cached")
+
+    assert client.get(f"/api/v2/internal/images/{digest}").status_code == 401
+    assert (
+        client.get(f"/api/v2/internal/images/{digest}", headers={"Authorization": "Bearer nope"}).status_code
+        == 401
+    )
+    ok = client.get(f"/api/v2/internal/images/{digest}", headers={"Authorization": "Bearer internal-secret"})
+    assert ok.status_code == 200 and ok.content == b"cached"
+
+    missing = client.get(
+        "/api/v2/internal/images/deadbeef", headers={"Authorization": "Bearer internal-secret"}
+    )
+    assert missing.status_code == 404
+
+
+def test_internal_endpoint_requires_configuration(client, services):
+    digest, _ = services.images.put(b"cached")
+    services.settings.inference_token = ""
+    resp = client.get(f"/api/v2/internal/images/{digest}", headers={"Authorization": "Bearer anything"})
+    assert resp.status_code == 403
+
+
+# endregion

@@ -12,6 +12,8 @@ import fnmatch
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+import numpy as np
+
 from v2.vendor.openlist_api import NotFoundError, OpenListAPIError
 
 
@@ -231,3 +233,40 @@ class FakeInference:
             "msg": "success",
             "data": [{"x": 1.0, "y": 2.0, "w": 3.0, "h": 4.0}],
         }
+
+
+class FakeEnginePredictor:
+    """Predictor stand-in for the worker engine: counts encodes/restores."""
+
+    loaded = True
+
+    def __init__(self, shape: tuple[int, int] = (720, 1280)) -> None:
+        self.shape = shape
+        self.encoded: list[tuple[int, int]] = []
+        self.restored: list[dict] = []
+        self.image = None
+
+    def set_image(self, image):
+        self.image = image
+        self.shape = image.shape[:2]
+        self.encoded.append(self.shape)
+        return self
+
+    def export_image_state(self) -> dict:
+        return {"shape": self.shape, "images": len(self.encoded)}
+
+    def import_image_state(self, state: dict) -> FakeEnginePredictor:
+        self.restored.append(state)
+        self.shape = state["shape"]
+        return self
+
+    def predict(self, points=None, labels=None, bboxes=None, text=None, conf=None, iou=None):
+        from inference.ztypes import SamOnnxResult
+
+        height, width = self.shape[:2]
+        mask = np.zeros((height, width), np.uint8)
+        # a centred blob that always fits the image the encoder saw
+        y0, y1 = height // 4, max(height // 4 + 1, height * 3 // 4)
+        x0, x1 = width // 4, max(width // 4 + 1, width * 3 // 4)
+        mask[y0:y1, x0:x1] = 255
+        return [SamOnnxResult(mask=mask.astype(np.float32), score=0.9)]

@@ -14,7 +14,9 @@ Preprocessing mirrors the ZLabel desktop pipeline:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -43,8 +45,29 @@ def _box_to_points(box_xyxy_px) -> tuple[list[tuple[float, float]], list[float]]
     return [(x1, y1), (x2, y2)], [2.0, 3.0]
 
 
-class _SamDecoderMixin:
+class _ImageStateMixin:
+    """Snapshot/restore the *encoded* image.
+
+    The serving layer (v2's inference worker) caches these snapshots per image so
+    repeated prompts on the same frame skip the encoder. Only the arrays the
+    decode path reads are touched — the numerics stay exactly as they were.
+    """
+
+    #: attribute names that make up the encoded image (overridden per runner)
+    _state_fields: tuple[str, ...] = ("_orig_shape",)
+
+    def export_image_state(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in self._state_fields}
+
+    def import_image_state(self, state: Mapping[str, Any]) -> None:
+        for name in self._state_fields:
+            setattr(self, name, state.get(name))
+
+
+class _SamDecoderMixin(_ImageStateMixin):
     """Shared prompt->decoder logic for SAM-family (encoder -> image_embeddings -> decoder)."""
+
+    _state_fields = ("_orig_shape", "_ratio")
 
     def __init__(
         self, letterbox: bool = False, img_size: int = SAM_IMG, backend: str = "CPU", threads: int = 4
@@ -158,6 +181,7 @@ class SamRunner(_SamDecoderMixin):
         self._encoder = OrtSession(self._encoder_path, backend=backend, threads=threads)
         self._decoder: OrtSession | None = None
         self._image_embeddings: np.ndarray | None = None
+        self._state_fields = ("_orig_shape", "_ratio", "_image_embeddings")
 
     def set_image(self, image_bgr: np.ndarray):
         debug_save.set_prompt()
@@ -190,6 +214,7 @@ class Sam2Runner(_SamDecoderMixin):
         self._image_embed: np.ndarray | None = None
         self._hr0: np.ndarray | None = None
         self._hr1: np.ndarray | None = None
+        self._state_fields = ("_orig_shape", "_ratio", "_image_embed", "_hr0", "_hr1")
 
     def set_image(self, image_bgr: np.ndarray):
         debug_save.set_prompt()
@@ -235,7 +260,7 @@ class Sam2Runner(_SamDecoderMixin):
         return sorted(results, key=lambda r: r.score, reverse=True)
 
 
-class Sam3Runner:
+class Sam3Runner(_ImageStateMixin):
     """SAM3: vision_encoder + pvs (interactive points) and text/geometry/detector (PCS)."""
 
     def __init__(
@@ -267,9 +292,11 @@ class Sam3Runner:
         self._tokenizer = None
         if (d / "vocab.json").exists() and (d / "merges.txt").exists():
             self._tokenizer = SimpleTokenizer.default(d)
+        self._img: np.ndarray | None = None
         self._orig_shape: tuple[int, int] | None = None
         self._pcs_feats: dict | None = None
         self._pvs_feats: dict | None = None
+        self._state_fields = ("_img", "_orig_shape", "_pcs_feats", "_pvs_feats")
 
     def set_image(self, image_bgr: np.ndarray):
         debug_save.set_prompt()

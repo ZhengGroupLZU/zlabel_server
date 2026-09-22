@@ -35,6 +35,8 @@ class InferenceSettings(BaseSettings):
     port: int = 8001
     # shared secret the API must present (empty = no auth, dev only)
     token: str = ""
+    # where the pull path fetches frames from (the API's /api/v2/internal/images)
+    api_base_url: str = "http://127.0.0.1:8000"
     # embeddings are cached by image sha256; this bounds that cache
     embedding_cache_size: int = 32
     # how many requests the worker runs concurrently (1 = serialise, safest for

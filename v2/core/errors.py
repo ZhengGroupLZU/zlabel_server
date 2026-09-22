@@ -79,6 +79,11 @@ class InferenceUnavailable(ApiError):
     code = "inference_unavailable"
 
 
+class WorkerBusy(ApiError):
+    status_code = 503
+    code = "worker_busy"
+
+
 def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error(_request: Request, exc: ApiError) -> JSONResponse:  # noqa: RUF029

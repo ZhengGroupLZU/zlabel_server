@@ -24,25 +24,30 @@ services:
       - openlist
     restart: unless-stopped
 
-  # Inference worker (M3): same image, worker entrypoint, owns the GPU.
-  # zlabel_inference:
-  #   build: {context: .}
-  #   command: ["sh", "-c", "uv run fastapi run v2/inference_worker/main.py --host 0.0.0.0 --port 8001"]
-  #   environment:
-  #     - ZLV2_MODEL_NAME=SlimSAM   # EdgeSAM SAM SlimSAM SAM2 SAM3
-  #     - ZLV2_MODEL_DIR=/app/assets/onnx
-  #     - ZLV2_ORT_BACKEND=CUDA     # CPU CUDA (falls back to CPU if unavailable)
-  #     - ZLV2_INFERENCE_TOKEN=${ZLV2_INFERENCE_TOKEN:-change-me}
-  #   volumes:
-  #     - ./assets:/app/assets
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
-  #   networks:
-  #     zlabel_server_network:
-  #       ipv4_address: 172.20.0.4
-  #   restart: unless-stopped
+  # Inference worker: same image, worker entrypoint, owns the GPU. Because the
+  # model lives here, restarting the API never reloads it.
+  zlabel_inference:
+    build:
+      context: .
+    command: ["sh", "-c", "uv run fastapi run v2/inference_worker/main.py --host 0.0.0.0 --port 8001"]
+    environment:
+      - ZLV2_MODEL_NAME=SlimSAM   # EdgeSAM SAM SlimSAM SAM2 SAM3
+      - ZLV2_MODEL_DIR=/app/assets/onnx
+      - ZLV2_ORT_BACKEND=CUDA     # CPU CUDA (falls back to CPU if unavailable)
+      - ZLV2_INFERENCE_TOKEN=${ZLV2_INFERENCE_TOKEN:-change-me}
+      - ZLV2_API_BASE_URL=http://zlabel_server:8000
+      - ZLV2_EMBEDDING_CACHE_SIZE=8
+      - ZLV2_MAX_CONCURRENCY=1
+    volumes:
+      - ./assets:/app/assets
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    networks:
+      zlabel_server_network:
+        ipv4_address: 172.20.0.4
+    restart: unless-stopped
 
   openlist:
     image: 'openlistteam/openlist:latest'

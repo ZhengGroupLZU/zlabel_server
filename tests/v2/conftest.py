@@ -22,8 +22,8 @@ def settings(tmp_path) -> Settings:
         upload_dir=str(tmp_path / "uploads"),
         oplist_host="http://openlist.test",  # never dialled: the fake client is injected
         oplist_token="service-token",  # background scan token
+        inference_token="internal-secret",  # shared secret (API <-> worker)
         inference_url="",
-        inference_token="",
         # deterministic tests: scanners are exercised explicitly
         scan_on_startup=False,
         project_scan_interval=0,

@@ -76,6 +76,11 @@ class Predictor:
         # onnxruntime sessions are not thread-safe across concurrent runs
         self._lock = threading.Lock()
 
+    @property
+    def loaded(self) -> bool:
+        """True once the ONNX sessions exist (the worker reports this in /health)."""
+        return self._runner is not None
+
     def setup_model(self):
         if self._runner is None:
             self._runner = build_runner(
@@ -92,6 +97,22 @@ class Predictor:
     def reset_image(self):
         with self._lock:
             self._runner = None
+
+    # region encoded-image snapshots (used by the serving cache)
+    def export_image_state(self) -> dict:
+        """Snapshot the encoded image (see ``runner.export_image_state``)."""
+        with self._lock:
+            self.setup_model()
+            return self._runner.export_image_state()
+
+    def import_image_state(self, state: dict) -> Predictor:
+        """Restore a snapshot: the next ``predict`` runs without re-encoding."""
+        with self._lock:
+            self.setup_model()
+            self._runner.import_image_state(state)
+        return self
+
+    # endregion
 
     def predict(
         self,

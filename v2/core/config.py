@@ -51,8 +51,11 @@ class Settings(BaseSettings):
 
     # --- inference service (separate process) ------------------------------
     inference_url: str = "http://127.0.0.1:8001"
-    inference_token: str = ""  # shared secret between API and worker
+    inference_token: str = ""  # shared secret between API and worker (both directions)
     inference_timeout: float = 180.0
+    # send the frame inline with every job; False = the worker pulls it from
+    # GET /api/v2/internal/images/{sha256} on an embedding miss
+    inference_inline_images: bool = True
 
     # --- images ------------------------------------------------------------
     max_upload_bytes: int = 64 * 1024 * 1024

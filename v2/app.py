@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 
-from v2.api.v2 import annotations, auth, health, images, labels, predict, projects, tasks
+from v2.api.v2 import annotations, auth, health, images, internal, labels, predict, projects, tasks
 from v2.core.config import Settings, get_settings
 from v2.core.errors import install_error_handlers
 from v2.core.logging import get_logger, set_request_id
@@ -85,4 +85,5 @@ def create_app(
     app.include_router(annotations.router, prefix=API_PREFIX)
     app.include_router(images.router, prefix=API_PREFIX)
     app.include_router(predict.router, prefix=API_PREFIX)
+    app.include_router(internal.router, prefix=API_PREFIX)
     return app

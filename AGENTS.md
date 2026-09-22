@@ -28,8 +28,8 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 | M1 | v2 skeleton: app factory, config/errors/logging, models + alembic, `/api/v2/health` — done |
 | M1b | inference assets → `inference/`, vendored SDK → `v2/vendor/`, v1 deleted, infra/docs — done |
 | M2 | services + v2 endpoints (auth/projects/tasks/annotations/images/labels/progress/predict) — done |
-| M3 | inference worker process (`/infer` + embedding cache by image sha256, health, metrics) — **next** |
-| M4 | desktop client switches to `/api/v2` (`docs/client-migration-v2.md`) |
+| M3 | inference worker process (`/infer`, embedding snapshots by image sha256, health, metrics) — done |
+| M4 | desktop client switches to `/api/v2` (`docs/client-migration-v2.md`) — **next** |
 | M5 | acceptance (DoD §14) |
 
 ## Contracts that must not break
@@ -72,6 +72,11 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - `v2/adapters/` — `openlist.py` (the only OpenList boundary, token-explicit: one
   client per call) and `inference.py` (`InferenceClient` → the worker's `/infer`).
 - `v2/vendor/openlist_api/` — vendored third-party SDK (do not edit; wrap it).
+- `v2/inference_worker/` — the model's own process: `main.py`
+  (`create_worker_app`: `/infer` + `/health` + `/metrics`), `engine.py`
+  (`InferenceEngine`: admission queue, embedding snapshots, crop handling,
+  metrics), `schemas.py` (job/response models). Run it with
+  `uv run fastapi run v2/inference_worker/main.py --port 8001`.
 - `inference/` — `sam_ort/` (Predictor/SamRunner/Sam2Runner/Sam3Runner),
   `worker.py` (`ZSamWorker`: prompt → mask → contour post-processing),
   `ztypes.py` (wire types + `AutoMode`/`ReturnType`), `config.py`
@@ -99,6 +104,14 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
   so tests stay deterministic; `tests/v2/test_startup.py` covers the scan itself and
   must use a **file-backed** DB — the in-memory StaticPool connection cannot be
   shared with the scan thread.
+- **Serving cache = image state snapshots.** `runner.export_image_state()/import_image_state()`
+  (and the `Predictor` wrappers) move the encoded image around; the worker caches
+  them per `sha256(+crop)` and restores instead of re-encoding. If you add state to
+  a runner (a new cached tensor), add it to that runner's `_state_fields` or the
+  restored frame silently produces wrong masks.
+- `mode` quirks (inherited from the desktop): 1 SAM, 2 CV, 3 SAM|CV, 0 = "SAM & CV"
+  (the value the client sends when both toggles are on). Only the rect path
+  implements 0/3; the worker validates up front so clients get 422, not a 500.
 - Claim state: `draft → submitted → approved|rejected` (`reopen` pulls back to draft).
   A claim carries `lease_expires_at`; an expired lease is claimable by anyone, a live
   one answers 409 `lease_conflict` with the holder + expiry. Saves renew the lease and

@@ -28,7 +28,12 @@ tests/         # v2 API/service tests, inference regression tests, vendor tests
 uv sync
 cp .env.example .env.v2        # adjust OpenList host/credentials, model
 uv run alembic upgrade head    # create the v2 schema (fresh database)
-uv run fastapi run v2/main.py  # http://127.0.0.1:8000  (OpenAPI at /docs)
+
+# API (http://127.0.0.1:8000, OpenAPI at /docs)
+uv run fastapi run v2/main.py
+
+# inference worker (own process, own GPU; needs ZLV2_MODEL_* + ZLV2_INFERENCE_TOKEN)
+uv run fastapi run v2/inference_worker/main.py --port 8001
 ```
 
 The v2 database (`ZLV2_DATABASE_URL`, default `./data/zlabel_server_v2.db`) is
