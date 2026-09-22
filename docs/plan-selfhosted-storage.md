@@ -11,15 +11,22 @@
 | P1 本地存储 | `v2/adapters/local_disk.py`：原子写（temp+rename）、ETag=size+mtime、路径穿越/符号链接防护、`list_dirs/glob_images/ensure_dir/usage/delete` | 同上 + `tests/v2/test_local_backend_api.py` |
 | P2 项目发现 | 不再依赖标记文件：本地后端下**每个顶层目录都是项目**（服务端拥有整棵树）；OpenList 仍按标记文件（`uses_marker_discovery`） | 同上（含"目录消失即停用"用例） |
 | P3 自建账号 | `v2/adapters/identity.py`：`IdentityProvider` 协议 + `LocalIdentity`（**scrypt**，标准库，无新依赖）+ `OpenListIdentity`（过渡期）；`users.password_hash`（alembic `8394f2f1aff0`）；启动引导 `ZLSERVER_BOOTSTRAP_ADMIN/PASSWORD`（只建不改） | `tests/v2/test_identity.py` |
-| P5 起始 | `v2/cli.py`：`user add/ls/passwd/role`、`storage usage`、`migrate-layout`（把 `<project>/zlabel` 原地搬到 `<project>/.zlabel/annos`，支持 `--dry-run`） | CLI 手动验证 |
+| P4 项目成员 | `project_members` 表（迁移 `045be3078645`）+ `ProjectService.role_for/require_access/require_project_reviewer` + 成员 CRUD 端点；`ZLSERVER_PROJECT_ACCESS_MODE=open\|strict`（默认 open 不改变现状）；项目列表/任务/标注/标签/复核全部按成员过滤，复核与标签写用**项目级**角色 | `tests/v2/test_members.py` |
+| P5 REST + CLI | `/api/v2/admin/users`（建号/改角色/启停/改密）、`/api/v2/admin/storage`、`/api/v2/admin/files`（list/upload/download/delete/mkdir/move，仅本地后端）；CLI 增 `project ls\|members\|add-member` | `tests/v2/test_admin.py` + CLI 实测 |
 
 零 OpenList 端到端（本地账号 + 本地存储，含领取/保存/提交/复核/进度）：`tests/v2/test_local_backend_api.py::test_zero_openlist_end_to_end`。
 
 ## 待做
 
-- **P4 项目级权限**：`project_members(project_id, user_id, role)` + `require_project_role`（从全局角色细化到项目级）；项目列表按成员过滤。
-- **P5 补全**：管理 REST（`/api/v2/admin/users|projects|files|usage|audit`）+ Web 后台（FastAPI + Jinja2/HTMX）：用户/项目/成员/文件浏览上传/用量/审计。
+- **P5 Web 后台**：管理 REST 已就绪（见上），还差一个服务端渲染的 Web UI（FastAPI + Jinja2/HTMX）调用它们：用户/成员/项目/文件浏览上传/用量/审计。目前用 CLI + curl 即可完成全部管理动作。
 - **P6 下线 OpenList**：删除 `v2/vendor/openlist_api/`（≈2000 行）与 `OpenListIdentity/OpenListAdapter`，`ZLSERVER_STORAGE_BACKEND`/`IDENTITY` 开关一并移除。
+
+## 权限模型（P4）
+
+- `ZLSERVER_PROJECT_ACCESS_MODE=open`（默认）：任何账号可使用任何项目，角色取全局角色 —— 与 P4 之前完全一致。
+- `strict`：非管理员只能看到/操作 `project_members` 里的项目；**项目角色优先于全局角色**（全局 admin 例外，始终可见全部）。
+- 复核、标签写、单项目扫描需要**该项目**的 reviewer；全局 reviewer 仍可扫描整棵树（`POST /projects/scan`）与建项目。
+- 服务层的角色检查通过 `AuthContext.with_role()` 注入的项目角色生效，因此复核/强制覆盖等内部判断自动跟着项目走。
 
 ## 存储布局
 

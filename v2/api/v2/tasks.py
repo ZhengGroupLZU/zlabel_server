@@ -14,6 +14,17 @@ router = APIRouter(tags=["tasks"])
 MAX_LIMIT = 500
 
 
+def _guard(services: Services, auth: AuthContext, anno_id: str) -> AuthContext:
+    """Access check for endpoints addressed by anno_id.
+
+    Returns the context carrying the caller's role *in that project*, so the
+    service layer's own role checks (``require_reviewer``) mean the project role.
+    """
+    row = services.tasks.get_task(anno_id)
+    role = services.projects.require_access(auth, row.project)
+    return auth.with_role(role)
+
+
 @router.get("/projects/{project}/tasks", response_model=TaskListOut)
 def list_tasks(
     project: str,
@@ -27,7 +38,7 @@ def list_tasks(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> TaskListOut:
-    services.projects.get_project(project)
+    services.projects.get_project(project, auth=auth)
     rows, total = services.tasks.list_tasks(
         project,
         state=state,
@@ -51,7 +62,7 @@ def list_groups(
     services: Services = Depends(get_services),
 ) -> list[GroupOut]:
     """Sequence groups with their frames (the client's timeline source)."""
-    services.projects.get_project(project)
+    services.projects.get_project(project, auth=auth)
     groups = services.tasks.groups(
         project, state=state, user_id=auth.user_id, claim="mine" if mine else claim
     )
@@ -67,7 +78,7 @@ def my_stats(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> dict[str, int]:
-    services.projects.get_project(project)
+    services.projects.get_project(project, auth=auth)
     return services.tasks.mine(project, auth.user_id)
 
 
@@ -77,6 +88,7 @@ def get_task(
     _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> TaskOut:
+    _guard(services, _auth, anno_id)
     return TaskOut.of(services.tasks.get_task(anno_id))
 
 
@@ -88,6 +100,7 @@ def claim_task(
     services: Services = Depends(get_services),
 ) -> TaskOut:
     """Returns 409 ``lease_conflict`` with the current holder when taken."""
+    auth = _guard(services, auth, anno_id)
     return TaskOut.of(services.tasks.claim(auth, anno_id, force=force))
 
 
@@ -97,6 +110,7 @@ def release_task(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> TaskOut:
+    auth = _guard(services, auth, anno_id)
     return TaskOut.of(services.tasks.release(auth, anno_id))
 
 
@@ -106,6 +120,7 @@ def heartbeat_task(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> TaskOut:
+    auth = _guard(services, auth, anno_id)
     return TaskOut.of(services.tasks.heartbeat(auth, anno_id))
 
 
@@ -116,6 +131,7 @@ def submit_task(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> TaskOut:
+    auth = _guard(services, auth, anno_id)
     return TaskOut.of(services.tasks.submit(auth, anno_id, force=force))
 
 
@@ -126,7 +142,8 @@ def review_task(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> TaskOut:
-    """Reviewer/admin only (403 otherwise); a rejection requires a note."""
+    """A reviewer of *this project* (403 otherwise); a rejection needs a note."""
+    auth = _guard(services, auth, anno_id)  # + the project role
     return TaskOut.of(services.tasks.review(auth, anno_id, payload.decision, payload.note))
 
 
@@ -137,4 +154,5 @@ def reopen_task(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> TaskOut:
+    auth = _guard(services, auth, anno_id)  # + the project role
     return TaskOut.of(services.tasks.reopen(auth, anno_id, payload.note))

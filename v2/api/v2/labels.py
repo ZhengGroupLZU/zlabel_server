@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Response
 
-from v2.api.deps import get_auth, get_services, require_roles
+from v2.api.deps import get_auth, get_services
 from v2.schemas.projects import LabelCreate, LabelOut, LabelPatch
 from v2.services.auth_service import AuthContext
 from v2.services.container import Services
@@ -29,9 +29,10 @@ def list_labels(
 def create_label(
     project: str,
     payload: LabelCreate,
-    auth: AuthContext = Depends(require_roles("reviewer", "admin")),
+    auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> LabelOut:
+    services.projects.require_project_reviewer(auth, project)
     return LabelOut.of(
         services.projects.create_label(
             project, payload.name, color=payload.color, sort=payload.sort, actor_id=auth.user_id
@@ -44,9 +45,10 @@ def update_label(
     project: str,
     label_id: int,
     payload: LabelPatch,
-    auth: AuthContext = Depends(require_roles("reviewer", "admin")),
+    auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> LabelOut:
+    services.projects.require_project_reviewer(auth, project)
     return LabelOut.of(
         services.projects.update_label(
             project,
@@ -64,8 +66,9 @@ def update_label(
 def delete_label(
     project: str,
     label_id: int,
-    auth: AuthContext = Depends(require_roles("reviewer", "admin")),
+    auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> Response:
+    services.projects.require_project_reviewer(auth, project)
     services.projects.delete_label(project, label_id, actor_id=auth.user_id)
     return Response(status_code=204)

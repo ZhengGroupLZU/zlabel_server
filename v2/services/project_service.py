@@ -19,19 +19,24 @@ from sqlalchemy.orm import Session as OrmSession
 from v2.adapters.openlist import OpenListAdapter
 from v2.contracts.ids import anno_id_for
 from v2.core.config import Settings
-from v2.core.errors import ApiError, Conflict, NotFound
+from v2.core.errors import ApiError, Conflict, Forbidden, NotFound, ValidationFailed
 from v2.core.logging import get_logger
 from v2.db.base import Database
 from v2.db.models import (
+    ROLE_ADMIN,
+    ROLE_REVIEWER,
+    ROLES,
     STATE_APPROVED,
     STATES,
     Label,
     Project,
+    ProjectMember,
     Task,
     User,
     utcnow,
 )
 from v2.services import audit
+from v2.services.auth_service import AuthContext
 from v2.services.grouping import parse_group
 
 logger = get_logger("zlabel.v2.projects")
@@ -179,14 +184,20 @@ class ProjectService:
     # endregion
 
     # region projects
-    def list_projects(self, *, active_only: bool = True) -> list[Project]:
+    def list_projects(self, *, active_only: bool = True, auth: AuthContext | None = None) -> list[Project]:
+        """Projects of the deployment, narrowed to the caller's memberships."""
         with self.db.session_scope() as session:
             query = select(Project).order_by(Project.name)
             if active_only:
                 query = query.where(Project.active.is_(True))
+            if auth is not None and self.strict_access and not auth.is_admin:
+                query = query.join(ProjectMember, ProjectMember.project_id == Project.id).where(
+                    ProjectMember.user_id == auth.user_id
+                )
             return list(session.scalars(query).all())
 
-    def get_project(self, name: str, *, active_only: bool = True) -> Project:
+    def get_project(self, name: str, *, active_only: bool = True, auth: AuthContext | None = None) -> Project:
+        """One project; with ``auth`` the caller's access is enforced."""
         with self.db.session_scope() as session:
             query = select(Project).where(Project.name == name)
             if active_only:
@@ -194,7 +205,9 @@ class ProjectService:
             project = session.scalar(query)
             if project is None:
                 raise NotFound(f"unknown project: {name}")
-            return project
+        if auth is not None:
+            self.require_access(auth, name)
+        return project
 
     def create_project(self, name: str, display_name: str = "", *, actor_id: int | None = None) -> Project:
         """Create the OpenList directory (with the marker file) and the DB row.
@@ -413,5 +426,120 @@ class ProjectService:
         if project_id is None:
             raise NotFound(f"unknown project: {name}")
         return int(project_id)
+
+    # endregion
+
+    # region membership (P4)
+    @property
+    def strict_access(self) -> bool:
+        """True when a project is only visible to its members."""
+        return self.settings.project_access_mode == "strict"
+
+    def role_for(self, auth: AuthContext, project: str) -> str:
+        """The caller's effective role for one project ("" = no access).
+
+        Global admins always have access; everyone else gets their membership role
+        in strict mode, or their global role in open mode (pre-P4 behaviour).
+        """
+        if auth.is_admin:
+            return ROLE_ADMIN
+        if not self.strict_access:
+            return auth.role
+        with self.db.session_scope() as session:
+            member = session.scalar(
+                select(ProjectMember)
+                .join(Project, Project.id == ProjectMember.project_id)
+                .where(Project.name == project, ProjectMember.user_id == auth.user_id)
+            )
+            return member.role if member is not None else ""
+
+    def require_access(self, auth: AuthContext, project: str) -> str:
+        """Raise 403 unless the caller may work on ``project``."""
+        role = self.role_for(auth, project)
+        if not role:
+            raise Forbidden(f"you are not a member of project {project!r}")
+        return role
+
+    def require_project_reviewer(self, auth: AuthContext, project: str) -> str:
+        """Raise 403 unless the caller reviews *this* project."""
+        role = self.require_access(auth, project)
+        if role not in (ROLE_REVIEWER, ROLE_ADMIN):
+            raise Forbidden(f"reviewer role required for project {project!r}")
+        return role
+
+    def accessible_projects(self, auth: AuthContext) -> set[str] | None:
+        """Project names the caller may see; ``None`` means "every project"."""
+        if auth.is_admin or not self.strict_access:
+            return None
+        with self.db.session_scope() as session:
+            rows = session.execute(
+                select(Project.name)
+                .join(ProjectMember, ProjectMember.project_id == Project.id)
+                .where(ProjectMember.user_id == auth.user_id)
+            ).all()
+            return {name for (name,) in rows}
+
+    def list_members(self, project: str) -> list[dict[str, Any]]:
+        with self.db.session_scope() as session:
+            project_id = self._project_id(session, project)
+            members = session.scalars(
+                select(ProjectMember).where(ProjectMember.project_id == project_id).order_by(ProjectMember.id)
+            ).all()
+            return [
+                {"user_id": member.user_id, "name": member.user.name, "role": member.role}
+                for member in members
+            ]
+
+    def add_member(
+        self, project: str, user_id: int, role: str, *, actor_id: int | None = None
+    ) -> dict[str, Any]:
+        """Add or re-role a member (idempotent)."""
+        if role not in ROLES:
+            raise ValidationFailed(f"unknown role: {role}")
+        with self.db.session_scope() as session:
+            project_id = self._project_id(session, project)
+            user = session.get(User, user_id)
+            if user is None:
+                raise NotFound(f"unknown user: {user_id}")
+            member = session.scalar(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == project_id, ProjectMember.user_id == user_id
+                )
+            )
+            if member is None:
+                member = ProjectMember(project_id=project_id, user_id=user_id, role=role)
+                session.add(member)
+            else:
+                member.role = role
+            session.flush()
+            audit.record(
+                session,
+                action="add_member",
+                user_id=actor_id,
+                target_type="project",
+                target_id=project,
+                detail={"member": user.name, "role": role},
+            )
+            return {"user_id": user.id, "name": user.name, "role": role}
+
+    def remove_member(self, project: str, user_id: int, *, actor_id: int | None = None) -> None:
+        with self.db.session_scope() as session:
+            project_id = self._project_id(session, project)
+            member = session.scalar(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == project_id, ProjectMember.user_id == user_id
+                )
+            )
+            if member is None:
+                raise NotFound(f"user {user_id} is not a member of {project!r}")
+            audit.record(
+                session,
+                action="remove_member",
+                user_id=actor_id,
+                target_type="project",
+                target_id=project,
+                detail={"member": member.user.name},
+            )
+            session.delete(member)
 
     # endregion

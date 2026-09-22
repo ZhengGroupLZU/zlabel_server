@@ -83,3 +83,18 @@ class LabelPatch(BaseModel):
     color: str | None = None
     sort: int | None = None
     archived: bool | None = None
+
+
+class MemberOut(BaseModel):
+    user_id: int
+    name: str
+    role: str
+
+
+class MemberCreate(BaseModel):
+    user_id: int
+    role: str = "annotator"
+
+
+class MemberPatch(BaseModel):
+    role: str

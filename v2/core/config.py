@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     identity: Literal["openlist", "local"] = "openlist"
     # optional: create this admin account at startup when it does not exist yet
     bootstrap_password: str = ""
+    # project access: "open" = any account may work on any project (pre-P4
+    # behaviour), "strict" = only `project_members` (global admins always see all)
+    project_access_mode: Literal["open", "strict"] = "open"
     # Where annotations live inside a project directory. Empty = pick by backend:
     # the local backend uses ".zlabel/annos" (same layout as the desktop's dataset
     # mode), the OpenList backend keeps the historical "zlabel" so an existing

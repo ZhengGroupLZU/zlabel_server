@@ -25,6 +25,7 @@ def get_annotation(
     services: Services = Depends(get_services),
 ) -> Response:
     """The stored document; ``404 not_found`` means "not annotated yet"."""
+    services.projects.require_access(auth, project)
     content, version = services.annotations.get(project, anno_id, auth.oplist_token)
     return Response(
         content=content,
@@ -48,6 +49,7 @@ def save_annotation(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> SaveResponse:
+    auth = auth.with_role(services.projects.require_access(auth, project))
     result = services.annotations.save(
         auth, project, anno_id, document, base_version=base_version, force=force, note=note
     )
@@ -61,6 +63,7 @@ def list_versions(
     _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> list[VersionOut]:
+    services.projects.require_access(_auth, project)
     return [VersionOut.of(row) for row in services.annotations.versions(project, anno_id)]
 
 
@@ -73,6 +76,7 @@ def get_version(
     services: Services = Depends(get_services),
 ) -> Response:
     """Content of a stored version (the current one included)."""
+    services.projects.require_access(auth, project)
     content = services.annotations.get_version(project, anno_id, version, auth.oplist_token)
     return Response(
         content=content,

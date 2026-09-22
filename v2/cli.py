@@ -97,6 +97,75 @@ def cmd_user_role(args) -> int:
 # endregion
 
 
+# region projects
+def _project_service(args):
+    _, database, _, storage = _services(args)
+    from v2.core.config import Settings
+    from v2.services.project_service import ProjectService
+
+    settings = Settings()
+    if args.database_url:
+        settings = settings.model_copy(update={"database_url": args.database_url})
+    return database, ProjectService(database, storage, settings)
+
+
+def cmd_project_ls(args) -> int:
+    database, projects = _project_service(args)
+    from sqlalchemy import func, select
+
+    from v2.db.models import ProjectMember, Task
+
+    rows = projects.list_projects(active_only=False)
+    if not rows:
+        print("(no projects)")
+        return 0
+    print(f"{'id':>4}  {'name':<28} {'active':<7} {'tasks':>6} {'members':>8}")
+    for project in rows:
+        with database.session_scope() as session:
+            tasks = session.scalar(
+                select(func.count()).select_from(Task).where(Task.project_id == project.id)
+            )
+            members = session.scalar(
+                select(func.count()).select_from(ProjectMember).where(ProjectMember.project_id == project.id)
+            )
+        print(
+            f"{project.id:>4}  {project.name:<28} {'yes' if project.active else 'no':<7} "
+            f"{tasks or 0:>6} {members or 0:>8}"
+        )
+    return 0
+
+
+def cmd_project_reviewer(args) -> int:
+    """Grant the project-reviewer role to a user for one project."""
+    database, projects = _project_service(args)
+    from sqlalchemy import func, select
+
+    from v2.db.models import User
+
+    with database.session_scope() as session:
+        user = session.scalar(select(User).where(func.lower(User.name) == args.user.lower()))
+    if user is None:
+        print(f"no such user: {args.user}", file=sys.stderr)
+        return 1
+    member = projects.add_member(args.project, user.id, args.role)
+    print(f"{member['name']!r} is {member['role']} in {args.project!r}")
+    return 0
+
+
+def cmd_project_members(args) -> int:
+    _database, projects = _project_service(args)
+    members = projects.list_members(args.project)
+    if not members:
+        print(f"(no members in {args.project})")
+        return 0
+    for member in members:
+        print(f"{member['user_id']:>4}  {member['name']:<20} {member['role']}")
+    return 0
+
+
+# endregion
+
+
 # region storage
 def cmd_storage_usage(args) -> int:
     _, _, _, storage = _services(args)
@@ -189,6 +258,19 @@ def build_parser() -> argparse.ArgumentParser:
     role.add_argument("role")
     role.set_defaults(func=cmd_user_role)
 
+    project = sub.add_parser("project", help="projects and members")
+    project_sub = project.add_subparsers(dest="project_command", required=True)
+    pls = project_sub.add_parser("ls", help="list projects with task/member counts")
+    pls.set_defaults(func=cmd_project_ls)
+    members = project_sub.add_parser("members", help="list a project's members")
+    members.add_argument("project")
+    members.set_defaults(func=cmd_project_members)
+    add_member = project_sub.add_parser("add-member", help="add/re-role a member")
+    add_member.add_argument("project")
+    add_member.add_argument("user")
+    add_member.add_argument("--role", default="annotator")
+    add_member.set_defaults(func=cmd_project_reviewer)
+
     storage = sub.add_parser("storage", help="storage helpers")
     storage_sub = storage.add_subparsers(dest="storage_command", required=True)
     usage = storage_sub.add_parser("usage", help="files/bytes under the storage root")
@@ -206,7 +288,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return int(args.func(args))
+    from v2.core.errors import ApiError
+
+    try:
+        return int(args.func(args))
+    except ApiError as e:  # 404 unknown project, 422 bad role, ...
+        print(f"error: {e.message}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

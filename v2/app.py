@@ -13,7 +13,19 @@ from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from v2.api.v2 import annotations, auth, health, images, internal, labels, predict, projects, tasks
+from v2.api.v2 import (
+    admin,
+    annotations,
+    auth,
+    health,
+    images,
+    internal,
+    labels,
+    members,
+    predict,
+    projects,
+    tasks,
+)
 from v2.core.config import Settings, get_settings
 from v2.core.errors import install_error_handlers
 from v2.core.logging import get_logger, set_request_id
@@ -115,6 +127,8 @@ def create_app(
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(projects.router, prefix=API_PREFIX)
     app.include_router(labels.router, prefix=API_PREFIX)
+    app.include_router(members.router, prefix=API_PREFIX)
+    app.include_router(admin.router, prefix=API_PREFIX)
     app.include_router(tasks.router, prefix=API_PREFIX)
     app.include_router(annotations.router, prefix=API_PREFIX)
     app.include_router(images.router, prefix=API_PREFIX)

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -51,6 +51,16 @@ class AuthContext:
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
+
+    def with_role(self, role: str) -> AuthContext:
+        """The same session, but with the role that applies *here*.
+
+        Project membership (P4) can differ from the global role, so routers resolve
+        the effective role once and hand the service layer a context that carries
+        it - the service's own ``require_reviewer`` then means "reviewer of this
+        project" without knowing about memberships.
+        """
+        return replace(self, role=role or self.role) if role else self
 
     def require_reviewer(self) -> None:
         if not self.is_reviewer:

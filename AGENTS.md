@@ -9,9 +9,15 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 
 - Setup: `uv sync` (Python 3.13 via `.python-version`)
 - Admin CLI: `uv run python -m v2.cli user add <name> --role reviewer|annotator|admin` ·
-  `user ls` · `user passwd <name>` · `user role <name> <role>` · `storage usage` ·
-  `migrate-layout --root <storage-root> [--dry-run]` (moves `<project>/zlabel` to
-  `<project>/.zlabel/annos`; see `docs/plan-selfhosted-storage.md`)
+  `user ls` · `user passwd <name>` · `user role <name> <role>` · `project ls` ·
+  `project members <project>` · `project add-member <project> <user> --role ...` ·
+  `storage usage` · `migrate-layout --root <storage-root> [--dry-run]` (moves
+  `<project>/zlabel` to `<project>/.zlabel/annos`; see `docs/plan-selfhosted-storage.md`)
+- Admin REST (global `admin` role): `/api/v2/admin/users` (+ `/{id}`, `/{id}/password`),
+  `/api/v2/admin/storage`, `/api/v2/admin/files` (list/upload/download/delete/mkdir/move,
+  local backend only). Project membership: `/api/v2/projects/{p}/members`. Project
+  visibility follows `ZLSERVER_PROJECT_ACCESS_MODE` (`open` default = pre-P4 behaviour,
+  `strict` = members only, global admins always see everything).
 - Migrations: `uv run alembic upgrade head` · `uv run alembic revision --autogenerate -m "msg"`
   (URL comes from `ZLSERVER_DATABASE_URL`, `-x db_url=...` overrides; never put it in `alembic.ini`)
 - Dev server: `uv run fastapi run v2/main.py` (entrypoint `v2/main.py`; OpenAPI at `/docs`).

@@ -214,3 +214,24 @@ class AuditLog(Base):
     detail_json: Mapped[str] = mapped_column(Text, default="{}")
 
     user: Mapped[User | None] = relationship(lazy="joined")
+
+
+class ProjectMember(Base):
+    """A user's role *inside one project* (P4).
+
+    Project visibility/participation is membership-driven in "strict" access mode;
+    a global admin always has access, and "open" mode keeps the pre-P4 behaviour
+    (any account may work on any project) so an existing deployment is unaffected.
+    """
+
+    __tablename__ = "project_members"
+    __table_args__ = (UniqueConstraint("project_id", "user_id", name="uq_member_project_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16), default=ROLE_ANNOTATOR)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    project: Mapped[Project] = relationship(lazy="joined")
+    user: Mapped[User] = relationship(lazy="joined")
