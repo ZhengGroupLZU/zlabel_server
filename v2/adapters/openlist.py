@@ -208,7 +208,7 @@ class OpenListAdapter:
         if status == 404:
             return NotFound(message)
         if status in (401, 403):
-            return SessionStale(f"{what}: {message}") if status == 401 else Forbidden(message)
+            return SessionStale(f"{what}: {message}") if status == 401 else Forbidden(f"{what}: {message}")
         if isinstance(exc, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
             return UpstreamError(f"cannot reach OpenList: {message}")
         if isinstance(exc, OpenListAPIError):

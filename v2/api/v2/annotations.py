@@ -21,11 +21,11 @@ router = APIRouter(prefix="/projects/{project}/annotations", tags=["annotations"
 def get_annotation(
     project: str,
     anno_id: str,
-    _auth: AuthContext = Depends(get_auth),
+    auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> Response:
     """The stored document; ``404 not_found`` means "not annotated yet"."""
-    content, version = services.annotations.get(project, anno_id)
+    content, version = services.annotations.get(project, anno_id, auth.oplist_token)
     return Response(
         content=content,
         media_type="application/json",
@@ -69,11 +69,11 @@ def get_version(
     project: str,
     anno_id: str,
     version: int,
-    _auth: AuthContext = Depends(get_auth),
+    auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> Response:
     """Content of a stored version (the current one included)."""
-    content = services.annotations.get_version(project, anno_id, version)
+    content = services.annotations.get_version(project, anno_id, version, auth.oplist_token)
     return Response(
         content=content,
         media_type="application/json",

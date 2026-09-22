@@ -229,3 +229,21 @@ def test_unknown_task_and_project_mismatch_are_404(client, auth_headers, ol):
 
 
 # endregion
+
+
+def test_annotation_io_uses_the_session_token_not_the_service_account(client, auth_headers, ol):
+    """Players write with their own OpenList rights (the service account is a
+    background scanner and is usually read-only)."""
+    headers = bootstrap(client, auth_headers, ol)
+    anno = task_id(client, headers["admin"])
+    put(client, headers["admin"], anno, document("Root"))
+
+    assert ol.token_log, "expected authenticated OpenList calls"
+    session_tokens = {token for token in ol.token_log if token and token != "service-token"}
+    assert session_tokens, "annotation IO must not use the service token"
+    assert f"{ROOT}/projA/zlabel/{anno}.zlabel" in ol.files
+
+    # a read goes through the session token as well
+    ol.token_log.clear()
+    client.get(f"/api/v2/projects/projA/annotations/{anno}", headers=headers["admin"])
+    assert "service-token" not in ol.token_log

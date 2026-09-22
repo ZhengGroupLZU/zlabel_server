@@ -29,7 +29,9 @@ def create_project(
     auth: AuthContext = Depends(require_roles("reviewer", "admin")),
     services: Services = Depends(get_services),
 ) -> ProjectOut:
-    project = services.projects.create_project(payload.name, payload.display_name, actor_id=auth.user_id)
+    project = services.projects.create_project(
+        payload.name, payload.display_name, actor_id=auth.user_id, token=auth.oplist_token
+    )
     return ProjectOut.of(project)
 
 

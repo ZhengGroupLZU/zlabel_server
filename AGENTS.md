@@ -53,6 +53,12 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
   new client-visible feature appears.
 - **Auth**: the client holds a server session token; the user's OpenList token is
   stored inside `sessions.oplist_token` and used for FS calls. Never store passwords.
+- **Whose OpenList token?** Everything a *user* does with files (frames, annotation
+  reads/writes/history, project creation) uses **that user's own token** — OpenList
+  ACLs stay in force. The service account (`ZLSERVER_OPLIST_TOKEN` or
+  username/password) is only for background work: project scanning. Getting this
+  wrong shows up as a confusing 403 "permission denied" from OpenList when the
+  service account is read-only.
 
 ## Architecture
 

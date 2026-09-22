@@ -133,3 +133,13 @@ def test_forbidden_and_api_errors_are_mapped(adapter: OpenListAdapter, ol: FakeO
 
 def test_is_image():
     assert is_image("a.PNG") and is_image("a.jpeg") and not is_image("a.txt")
+
+
+def test_forbidden_messages_name_the_operation(adapter: OpenListAdapter, ol: FakeOpenList):
+    """A 403 must say *what* OpenList refused, not just "permission denied"."""
+    token = adapter.login("rainy", "secret")
+    ol.fail_on(f"{PROJ}/zlabel/x.zlabel", OpenListAPIError("permission denied", status_code=403))
+    with pytest.raises(Forbidden) as exc:
+        adapter.put_bytes(f"{PROJ}/zlabel/x.zlabel", b"{}", token)
+    assert "permission denied" in exc.value.message
+    assert "upload(" in exc.value.message  # names the operation

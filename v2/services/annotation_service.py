@@ -94,9 +94,14 @@ class AnnotationService:
         self.settings = settings
 
     # region reads
-    def get(self, project: str, anno_id: str) -> tuple[bytes, int]:
-        """Current document + version; 404 when this frame is not annotated yet."""
-        content = self.openlist.get_bytes(self.openlist.anno_path(project, anno_id), self._token())
+    def get(self, project: str, anno_id: str, token: str) -> tuple[bytes, int]:
+        """Current document + version; 404 when this frame is not annotated yet.
+
+        ``token`` is the *session user's* OpenList token: annotations follow the
+        user's own ACLs, exactly like the frames (the service account is only for
+        background scans, and it usually is read-only).
+        """
+        content = self.openlist.get_bytes(self.openlist.anno_path(project, anno_id), token)
         with self.db.session_scope() as session:
             row = session.scalar(select(Annotation).where(Annotation.anno_id == anno_id))
         return content, int(row.version) if row is not None else 0
@@ -124,13 +129,13 @@ class AnnotationService:
                 for row in rows
             ]
 
-    def get_version(self, project: str, anno_id: str, version: int) -> bytes:
+    def get_version(self, project: str, anno_id: str, version: int, token: str) -> bytes:
         """Historical document, or the current one when the versions match."""
-        current_bytes, current_version = self.get(project, anno_id)
+        current_bytes, current_version = self.get(project, anno_id, token)
         if version <= 0 or version == current_version:
             return current_bytes
         path = self.openlist.history_path(project, anno_id, version)
-        return self.openlist.get_bytes(path, self._token())
+        return self.openlist.get_bytes(path, token)
 
     def meta(self, anno_id: str) -> tuple[int, str]:
         """``(version, state)`` for a task; ``(0, state)`` when never saved."""
@@ -161,7 +166,7 @@ class AnnotationService:
         payload = json.dumps(document, ensure_ascii=False).encode("utf-8")
         content_hash = hashlib.sha256(payload).hexdigest()
         labels = extract_label_names(document)
-        token = self._token()
+        token = auth.oplist_token  # the caller's own OpenList rights
 
         with self.db.session_scope() as session:
             task = session.scalar(select(Task).where(Task.anno_id == anno_id))
@@ -256,11 +261,5 @@ class AnnotationService:
         if not wanted:
             return {}
         return dict(session.execute(select(User.id, User.name).where(User.id.in_(wanted))).all())
-
-    def _token(self) -> str:
-        """Background/annotation IO uses the service token (OpenList ACL for the
-        per-user token is still applied to images, which are read through the
-        session token in the images router)."""
-        return self.openlist.service_token()
 
     # endregion
