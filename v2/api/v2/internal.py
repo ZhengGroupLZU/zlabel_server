@@ -1,6 +1,6 @@
 """Machine-to-machine endpoints (the inference worker is the only client).
 
-Guarded by the same shared secret as ``/infer`` (``ZLV2_INFERENCE_TOKEN``) instead
+Guarded by the same shared secret as ``/infer`` (``ZLSERVER_INFERENCE_TOKEN``) instead
 of a user session, because the worker has no user identity.
 """
 
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 def require_internal_token(request: Request, authorization: str | None = Header(None)) -> None:
     expected = getattr(request.app.state.settings, "inference_token", "")
     if not expected:
-        raise Forbidden("ZLV2_INFERENCE_TOKEN is not configured")
+        raise Forbidden("ZLSERVER_INFERENCE_TOKEN is not configured")
     if not secrets.compare_digest(bearer_token(authorization), expected):
         raise Unauthorized("bad internal token")
 

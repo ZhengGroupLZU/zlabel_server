@@ -27,7 +27,7 @@ inference/               # 从 app/ 搬来的推理资产（sam_ort/、worker.py
 v2/
   main.py                # FastAPI 装配（include v2 routers + v1 兼容 router）+ lifespan
   core/
-    config.py            # pydantic-settings，ZLV2_* 前缀
+    config.py            # pydantic-settings，ZLSERVER_* 前缀
     logging.py           # 结构化日志 + request id
     errors.py            # 统一错误模型 {code, message, detail}
     security.py          # session 签发/校验、角色依赖（require_user / require_role）
@@ -58,7 +58,7 @@ docs/
 
 ## 4. 领域模型与 DB schema
 
-**全新数据库**（`ZLV2_DATABASE_URL`，默认 `data/zlabel_server_v2.db`）：
+**全新数据库**（`ZLSERVER_DATABASE_URL`，默认 `data/zlabel_server_v2.db`）：
 v2 **不迁移、不导入 v1 数据**（旧项目不保留；任务表本来就能由 OpenList 重扫重建）。
 v1 的 `zlabel_server.db` 留给旧服务端（M4 双跑对比需要两者并存）。
 schema 由 **alembic** 管理（`uv run alembic upgrade head`），首次即建全量 v2 表：
@@ -157,12 +157,12 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
                                                                                     └─ 单/多 GPU 队列
 ```
 
-- job（API → worker，`POST /infer`，Bearer 内部 token）：`{job_id, anno_id, image_sha256, image_b64, model, prompts{points,labels,rects,texts}, threshold, mode, return_type, crop_box}`；同步等待（HTTP，超时 `ZLV2_INFERENCE_TIMEOUT`），worker 内部串行或按 GPU 并发。M3 可再加 `image_url` 拉取模式，避免大图重复上传。
-- **embedding 缓存 key = 图像 sha256（+ crop）**：runner 暴露 `export_image_state()/import_image_state()`，把编码结果（SAM 的 `image_embeddings`、SAM2 的 `image_embed/high_res_*`、SAM3 的 `img/pcs/pvs feats`）整体快照；命中时**直接恢复**而非重算（`EmbeddingCache`，LRU，`ZLV2_EMBEDDING_CACHE_SIZE`）。同一张图第二次点击零编码，且每个 job 只可能用自己那帧的编码。
+- job（API → worker，`POST /infer`，Bearer 内部 token）：`{job_id, anno_id, image_sha256, image_b64, model, prompts{points,labels,rects,texts}, threshold, mode, return_type, crop_box}`；同步等待（HTTP，超时 `ZLSERVER_INFERENCE_TIMEOUT`），worker 内部串行或按 GPU 并发。M3 可再加 `image_url` 拉取模式，避免大图重复上传。
+- **embedding 缓存 key = 图像 sha256（+ crop）**：runner 暴露 `export_image_state()/import_image_state()`，把编码结果（SAM 的 `image_embeddings`、SAM2 的 `image_embed/high_res_*`、SAM3 的 `img/pcs/pvs feats`）整体快照；命中时**直接恢复**而非重算（`EmbeddingCache`，LRU，`ZLSERVER_EMBEDDING_CACHE_SIZE`）。同一张图第二次点击零编码，且每个 job 只可能用自己那帧的编码。
 - worker 暴露 `GET /health`（模型/设备/是否已加载/缓存与队列深度，无需鉴权）与 `GET /metrics`（jobs/errors/命中率/p50-p95/max/uptime，需内部 token）。
-- 取图两种方式：默认 `ZLV2_INFERENCE_INLINE_IMAGES=true` 随 job 内联；置 false 则 API 把帧写进内容寻址缓存并给 `image_url`，worker 在**缓存未命中时**才拉（`GET /api/v2/internal/images/{sha}`，内部 token 鉴权）。
+- 取图两种方式：默认 `ZLSERVER_INFERENCE_INLINE_IMAGES=true` 随 job 内联；置 false 则 API 把帧写进内容寻址缓存并给 `image_url`，worker 在**缓存未命中时**才拉（`GET /api/v2/internal/images/{sha}`，内部 token 鉴权）。
 - `mode` 校验前置（不再 500）：点提示只接受 1(SAM)/2(CV)，框提示接受 0/1/2/3，文本只接受 1；`mode=0` 是客户端"同时勾选 SAM+OpenCV"的历史值，按旧语义交给框路径。
-- 模型参数沿用 v1：`ZLV2_MODEL_NAME/DIR/BACKEND`、SAM3 conf/iou、轮廓后处理参数（与桌面端逐像素对齐的预处理逻辑保持不变）。
+- 模型参数沿用 v1：`ZLSERVER_MODEL_NAME/DIR/BACKEND`、SAM3 conf/iou、轮廓后处理参数（与桌面端逐像素对齐的预处理逻辑保持不变）。
 - 降级：worker 不可达 → `503 inference_unavailable`，客户端提示"推理不可用，可继续手动标注"（不再 500）。
 
 ## 9. 序列分组：由服务端解析
@@ -185,7 +185,7 @@ v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。
 **删除（v1 专属）**
 - `app/app.py`（v1 全部路由与模块级状态）、`app/db.py`、`app/config.py`、`app/logger.py`、`app/project_scan.py`、`app/schemas.py`
 - v1 的接口/DB 语义测试（test_api / test_auth / test_labels / test_save_zlabel / test_missing_tasks / test_anno_id / test_project_scan）——覆盖在 M2 用 v2 服务层测试重建；`anno_id` 契约已在 `tests/v2/test_models.py` 固化
-- 未使用依赖 `fastapi-users`、`typer`；`.env.onnx`（v1 变量名）→ `.env.example`（`ZLV2_*`）
+- 未使用依赖 `fastapi-users`、`typer`；`.env.onnx`（v1 变量名）→ `.env.example`（`ZLSERVER_*`）
 
 **不可回退点**：`/api/v1` 与 `zlabel_server.db` 一起失效。回滚只有两条路——部署上一个 v2 版本（推荐，数据面不变），或整体退回 `onnx` 分支（必须同时退回旧客户端，且新旧库数据不互通）。
 

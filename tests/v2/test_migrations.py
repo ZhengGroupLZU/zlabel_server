@@ -30,7 +30,7 @@ EXPECTED_TABLES = {
 @pytest.fixture
 def alembic_env(tmp_path, monkeypatch) -> Iterator[tuple[Config, str]]:
     url = f"sqlite+pysqlite:///{(tmp_path / 'v2_migrate.db').as_posix()}"
-    monkeypatch.setenv("ZLV2_DATABASE_URL", url)
+    monkeypatch.setenv("ZLSERVER_DATABASE_URL", url)
     get_settings.cache_clear()
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "v2" / "db" / "migrations"))

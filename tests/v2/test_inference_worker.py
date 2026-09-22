@@ -121,7 +121,7 @@ def test_image_pull_path():
         assert kwargs["headers"]["Authorization"] == "Bearer secret"
         return type("Resp", (), {"status_code": 200, "content": png_bytes()})()
 
-    settings = InferenceSettings(api_base_url="http://api.test", token="secret")
+    settings = InferenceSettings(api_base_url="http://api.test", inference_token="secret")
     engine = InferenceEngine(settings, predictor=FakeEnginePredictor(), fetch=fetch)
     pulled = InferJob(
         anno_id="anno1",
@@ -208,7 +208,7 @@ def worker_client(**settings_kwargs):
 
 
 def test_worker_requires_the_shared_token():
-    client, _ = worker_client(token="secret")
+    client, _ = worker_client(inference_token="secret")
     body = {
         "anno_id": "a",
         "image_b64": base64.b64encode(png_bytes()).decode(),
@@ -217,12 +217,12 @@ def test_worker_requires_the_shared_token():
     assert client.post("/infer", json=body).status_code == 401
     assert client.post("/infer", json=body, headers={"Authorization": "Bearer nope"}).status_code == 401
 
-    unconfigured, _ = worker_client(token="")
+    unconfigured, _ = worker_client(inference_token="")
     assert unconfigured.post("/infer", json=body).status_code == 403
 
 
 def test_worker_infer_roundtrip_and_health():
-    client, engine = worker_client(token="secret")
+    client, engine = worker_client(inference_token="secret")
     headers = {"Authorization": "Bearer secret"}
     body = {
         "anno_id": "anno1",
@@ -254,7 +254,7 @@ def test_worker_infer_roundtrip_and_health():
 
 
 def test_worker_rejects_bad_payloads():
-    client, _ = worker_client(token="secret")
+    client, _ = worker_client(inference_token="secret")
     headers = {"Authorization": "Bearer secret"}
     assert client.post("/infer", json={"prompts": {}}, headers=headers).status_code == 422
     assert client.post("/infer", json={}, headers=headers).status_code == 422

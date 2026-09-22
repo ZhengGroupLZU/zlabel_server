@@ -32,11 +32,11 @@ uv run alembic upgrade head    # create the v2 schema (fresh database)
 # API (http://127.0.0.1:8000, OpenAPI at /docs)
 uv run fastapi run v2/main.py
 
-# inference worker (own process, own GPU; needs ZLV2_MODEL_* + ZLV2_INFERENCE_TOKEN)
+# inference worker (own process, own GPU; needs ZLSERVER_MODEL_* + ZLSERVER_INFERENCE_TOKEN)
 uv run fastapi run v2/inference_worker/main.py --port 8001
 ```
 
-The v2 database (`ZLV2_DATABASE_URL`, default `./data/zlabel_server_v2.db`) is
+The v2 database (`ZLSERVER_DATABASE_URL`, default `./data/zlabel_server_v2.db`) is
 independent from the old `zlabel_server.db`: v1 data is **not** migrated.
 
 Quality gates:

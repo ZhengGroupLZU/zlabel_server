@@ -9,7 +9,7 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 
 - Setup: `uv sync` (Python 3.13 via `.python-version`)
 - Migrations: `uv run alembic upgrade head` · `uv run alembic revision --autogenerate -m "msg"`
-  (URL comes from `ZLV2_DATABASE_URL`, `-x db_url=...` overrides; never put it in `alembic.ini`)
+  (URL comes from `ZLSERVER_DATABASE_URL`, `-x db_url=...` overrides; never put it in `alembic.ini`)
 - Dev server: `uv run fastapi run v2/main.py` (entrypoint `v2/main.py`; OpenAPI at `/docs`).
   On Windows run `chcp 65001` or set `PYTHONIOENCODING=utf-8` — FastAPI's rich banner
   crashes on a GBK console with `UnicodeEncodeError`.
@@ -42,7 +42,7 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - **anno_id**: `md5("<project>/<project-relative posix path>")` (`v2/contracts/ids.py`),
   identical to the desktop client's `zlabel.utils.project.anno_id_for`. Local mirrors
   and OpenList annotation files stay interchangeable only while this holds.
-- **Annotation files stay in OpenList** at `{ZLV2_OPLIST_PROJ_DIR}/{project}/zlabel/<anno_id>.zlabel`;
+- **Annotation files stay in OpenList** at `{ZLSERVER_OPLIST_PROJ_DIR}/{project}/zlabel/<anno_id>.zlabel`;
   the DB keeps metadata/versions only.
 - **Error model**: `{code, message, detail}` with machine-readable codes
   (`unauthorized`/`session_stale`/`forbidden`/`not_found`/`conflict`/`lease_conflict`/
@@ -59,7 +59,7 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - `v2/app.py` — `create_app(settings, database)`; **all state on `app.state`**
   (`settings`, `db`). Tests build an isolated app with an in-memory DB instead of
   monkeypatching module globals (the v1 pattern that v2 deliberately drops).
-- `v2/core/` — `config.py` (`ZLV2_*` settings, `get_settings()` cached),
+- `v2/core/` — `config.py` (`ZLSERVER_*` settings, `get_settings()` cached),
   `errors.py` (ApiError hierarchy + handlers), `logging.py` (request-id aware).
 - `v2/db/` — `base.py` (`Database.session_scope`, `get_session` dependency),
   `models.py` (users, sessions, projects, labels, tasks, annotations,
@@ -85,7 +85,7 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - `inference/` — `sam_ort/` (Predictor/SamRunner/Sam2Runner/Sam3Runner),
   `worker.py` (`ZSamWorker`: prompt → mask → contour post-processing),
   `ztypes.py` (wire types + `AutoMode`/`ReturnType`), `config.py`
-  (`InferenceSettings`, same `ZLV2_` prefix), `logging.py` (`ZLogger`).
+  (`InferenceSettings`, same `ZLSERVER_` prefix), `logging.py` (`ZLogger`).
   The API process must **not** hold model state (M3 moves it to its own service).
 
 ## Gotchas

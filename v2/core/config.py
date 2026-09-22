@@ -1,11 +1,12 @@
-"""v2 configuration.
+"""Server configuration.
 
-Env vars use the ``ZLV2_`` prefix (optional ``.env.v2`` file) so a v2 process can
-run next to the v1 server (``ZLSERVER_``) on the same host — that is required for
-the M4 dual-run comparison.
+Every env var uses the ``ZLSERVER_`` prefix and the optional ``.env.v2`` file
+(kept separate from the deleted v1 ``.env.onnx`` so a stale file is never read by
+accident). The API and the inference worker share the prefix; each process reads
+the fields it knows and ignores the rest.
 
-The v2 database is a **separate, fresh file**: v2 neither migrates nor imports v1
-data (old projects are intentionally not preserved).
+The database is a **fresh file** (``data/zlabel_server_v2.db``): v1 data was not
+migrated and old projects are intentionally not preserved.
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 64 * 1024 * 1024
 
     model_config = SettingsConfigDict(
-        env_prefix="ZLV2_",
+        env_prefix="ZLSERVER_",
         env_file=".env.v2",
         env_file_encoding="utf-8",
         extra="ignore",

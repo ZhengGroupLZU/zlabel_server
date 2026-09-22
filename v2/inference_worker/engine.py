@@ -256,7 +256,11 @@ class InferenceEngine:
             url = job.image_url
             if not url.startswith("http"):
                 url = f"{self.settings.api_base_url.rstrip('/')}/{url.lstrip('/')}"
-            headers = {"Authorization": f"Bearer {self.settings.token}"} if self.settings.token else {}
+            headers = (
+                {"Authorization": f"Bearer {self.settings.inference_token}"}
+                if self.settings.inference_token
+                else {}
+            )
             try:
                 resp = self._fetch(url, headers=headers, timeout=60)
             except requests.RequestException as e:

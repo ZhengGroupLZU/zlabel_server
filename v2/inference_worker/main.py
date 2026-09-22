@@ -3,7 +3,7 @@
     uv run fastapi run v2/inference_worker/main.py --port 8001
 
 The API talks to it over ``POST /infer`` with the shared secret
-(``ZLV2_INFERENCE_TOKEN``). Keeping the model out of the API process means an API
+(``ZLSERVER_INFERENCE_TOKEN``). Keeping the model out of the API process means an API
 restart never reloads a multi-GB model and the GPU queue never blocks HTTP
 workers.
 """
@@ -39,9 +39,9 @@ def create_worker_app(
 
     def require_worker_token(authorization: str | None = Header(None)) -> None:
         """Both directions share one secret; an unconfigured secret is a hard stop."""
-        expected = settings.token
+        expected = settings.inference_token
         if not expected:
-            raise Forbidden("ZLV2_INFERENCE_TOKEN is not configured on the worker")
+            raise Forbidden("ZLSERVER_INFERENCE_TOKEN is not configured on the worker")
         if not secrets.compare_digest(bearer_token(authorization), expected):
             raise Unauthorized("bad worker token")
 

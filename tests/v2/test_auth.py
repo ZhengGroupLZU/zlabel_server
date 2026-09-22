@@ -77,7 +77,7 @@ def test_second_user_gets_the_annotator_role(client, auth_headers, ol):
 
 
 def test_bootstrap_admin_is_honoured(settings, db, ol):
-    """``ZLV2_BOOTSTRAP_ADMIN`` promotes that account even when it is not first."""
+    """``ZLSERVER_BOOTSTRAP_ADMIN`` promotes that account even when it is not first."""
     from v2.adapters.openlist import OpenListAdapter
     from v2.services.auth_service import AuthService
 

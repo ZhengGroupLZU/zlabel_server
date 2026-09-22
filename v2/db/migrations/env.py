@@ -1,6 +1,6 @@
 """Alembic environment for the v2 schema.
 
-The database URL comes from ``ZLV2_DATABASE_URL`` (or ``-x db_url=...``), never
+The database URL comes from ``ZLSERVER_DATABASE_URL`` (or ``-x db_url=...``), never
 from ``alembic.ini``. ``render_as_batch`` is on because SQLite cannot ALTER
 columns in place.
 """
