@@ -13,6 +13,11 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - Dev server: `uv run fastapi run v2/main.py` (entrypoint `v2/main.py`; OpenAPI at `/docs`).
   On Windows run `chcp 65001` or set `PYTHONIOENCODING=utf-8` — FastAPI's rich banner
   crashes on a GBK console with `UnicodeEncodeError`.
+- Cross-repo contract test: `tests/v2/test_client_contract.py` loads the desktop's
+  `zlabel/utils/api_helper.py` (standalone, without PySide6) and routes its
+  `requests` calls into the in-process app — every URL/params/body the desktop
+  produces is checked against the server. It skips unless the desktop checkout is
+  present next door (``zlabel_server/`` normally lives inside it).
 - Tests: `uv run pytest` (pyproject defaults to `-m 'not slow'`) ·
   `uv run pytest -m slow` (real ONNX models, minutes) ·
   `uv run pytest -m gpu` (CPU/CUDA parity; needs a working CUDA/cuBLAS stack)
@@ -112,6 +117,10 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - `mode` quirks (inherited from the desktop): 1 SAM, 2 CV, 3 SAM|CV, 0 = "SAM & CV"
   (the value the client sends when both toggles are on). Only the rect path
   implements 0/3; the worker validates up front so clients get 422, not a 500.
+- Listing parameters the desktop relies on: `state` accepts a comma separated list
+  (`draft,rejected`), `order` is `sequence|id|recent|random`, and
+  `POST /projects/{p}/scan` works for a project that does not exist yet (finding new
+  OpenList directories is the point of a scan).
 - Claim state: `draft → submitted → approved|rejected` (`reopen` pulls back to draft).
   A claim carries `lease_expires_at`; an expired lease is claimable by anyone, a live
   one answers 409 `lease_conflict` with the holder + expiry. Saves renew the lease and

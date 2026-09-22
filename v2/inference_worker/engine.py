@@ -195,7 +195,7 @@ class InferenceEngine:
             contour_max_points=self.settings.contour_max_points,
             contour_max_iterations=self.settings.contour_max_iterations,
         )
-        data = self._dispatch(worker, job, mode)
+        data = self._dispatch(worker, job, mode, offset)
         if offset != (0.0, 0.0):
             data = shift_results(data, *offset)
         return SamReturn(
@@ -206,20 +206,26 @@ class InferenceEngine:
             data=list(data),
         ).model_dump()
 
-    def _dispatch(self, worker: ZSamWorker, job: InferJob, mode: AutoMode):
+    def _dispatch(
+        self, worker: ZSamWorker, job: InferJob, mode: AutoMode, offset: tuple[float, float] = (0.0, 0.0)
+    ):
         prompts = job.prompts
+        dx, dy = -offset[0], -offset[1]  # full-image prompts -> crop space
         if prompts.texts:
             if mode is not AutoMode.SAM:
                 raise ValidationFailed("text prompts require mode=1 (SAM)")
             return worker.run_text(prompts.texts)
         if prompts.rects:
-            return worker.run_rect(self._rects(prompts.rects))
+            return worker.run_rect(
+                [Rect(x=r.x + dx, y=r.y + dy, w=r.w, h=r.h) for r in self._rects(prompts.rects)]
+            )
         if prompts.points:
+            points = self._points(prompts.points)
+            if offset != (0.0, 0.0):
+                points = [Point(x=p.x + dx, y=p.y + dy) for p in points]
             if mode not in (AutoMode.SAM, AutoMode.CV):
                 raise ValidationFailed("point prompts support mode=1 (SAM) or mode=2 (CV)")
-            return worker.run_point(
-                self._points(prompts.points), list(prompts.labels or [1] * len(prompts.points))
-            )
+            return worker.run_point(points, list(prompts.labels or [1] * len(points)))
         raise ValidationFailed("the job carries no prompts (points/rects/texts)")
 
     def _ensure_embedding(self, key: str, image: np.ndarray) -> bool:

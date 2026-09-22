@@ -204,7 +204,7 @@ v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。
 | M1b | 资产搬迁（`inference/`、`v2/vendor/`）+ v1 彻底删除 + 基建/文档更新 | ✅ 已完成：`app/` 不存在，推理回归测试全绿 |
 | M2 | 服务层 + `/api/v2` 端点（auth/projects/tasks/annotations/images/labels/progress/predict）+ hermetic 测试 | ✅ 已完成：109 个 v2 用例（role/lease/conflict/版本/预测） |
 | M3 | 推理进程 + InferenceClient（embedding 缓存、health、metrics） | ✅ 已完成：同图重复请求零编码（快照恢复），模型在独立进程 |
-| M4 | 桌面端切 v2（见 `client-migration-v2.md`） | 客户端全部调用走 `/api/v2` |
+| M4 | 桌面端切 v2（见 `client-migration-v2.md`） | 进行中：协议层 C1–C3+C7 已完成（分支 `zlabel-v2-client`，含跨仓库契约测试）；领取/复核 UI 等留待第二批 |
 | M5 | 验收：DoD §14 全项通过 | 交付 |
 
 回滚：v1 已删除，v2 与 v1 不互通，因此切换需要一个明确的停机窗口。窗口内回滚 = 部署上一个 v2 版本（数据面不变，v2 从 M1 起就一直用新库）；只有放弃 v2 时才退回 `onnx` 分支 + 旧客户端。

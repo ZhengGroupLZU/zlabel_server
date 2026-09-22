@@ -23,7 +23,7 @@ def list_tasks(
     group: str | None = Query(None),
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
     offset: int = Query(0, ge=0),
-    order: str = Query("sequence", description="sequence | id | recent"),
+    order: str = Query("sequence", description="sequence | id | recent | random"),
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> TaskListOut:

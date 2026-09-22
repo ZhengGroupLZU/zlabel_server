@@ -20,6 +20,7 @@ class ProgressOut(BaseModel):
 
 
 class ProjectOut(BaseModel):
+    id: int = 0
     name: str
     display_name: str = ""
     description: str = ""
@@ -29,6 +30,7 @@ class ProjectOut(BaseModel):
     @classmethod
     def of(cls, project, progress: dict | None = None) -> ProjectOut:
         return cls(
+            id=int(getattr(project, "id", 0) or 0),
             name=project.name,
             display_name=project.display_name or project.name,
             description=project.description or "",

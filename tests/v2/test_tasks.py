@@ -251,3 +251,11 @@ def test_my_stats_and_audit_trail(client, auth_headers, ol, db):
 
 
 # endregion
+
+
+def test_random_order_returns_the_requested_page(client, auth_headers, ol):
+    headers = bootstrap(client, auth_headers, ol, files=("a.png", "b.png", "c.png"))
+    page = client.get(
+        "/api/v2/projects/projA/tasks", params={"order": "random", "limit": 2}, headers=headers["admin"]
+    ).json()
+    assert page["total"] == 3 and len(page["items"]) == 2

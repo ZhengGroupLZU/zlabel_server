@@ -18,6 +18,14 @@
 
 ## 1. 分阶段清单
 
+> 进度：**第一批（协议层）已完成** — C1、C2、C3、C7 已落地，并且顺带把
+> C9/C10 里客户端已经在用的三个调用（labels / progress / scan）切到了 v2；
+> 服务端侧同样落地的配套改动：`ProjectOut.id`、`state` 支持逗号列表、
+> `order=random`、`scan` 不要求项目已存在、worker 侧 crop 提示词平移修复。
+> 第二批待做：C4 领取/租约 UI、C5 冲突详情弹窗与版本历史浏览、C6 提交/复核动作、
+> C8 图像 ETag 磁盘缓存、C9 标签编辑、C10 项目创建、C11 剩余 i18n、C12 补充 GUI 测试。
+
+
 ### C1 版本与能力探测（阻塞项）
 - 登录成功后 `GET /api/v2/health`：校验 `version >= 2.0`，并把 `capabilities`（`tasks.claim`/`tasks.review`/`annotations.versions`/`labels.write`/`predict.stateless`）存入 session。
 - 服务器版本不匹配 → 明确提示「服务端版本过旧，请同步升级」，不进入标注界面（避免半可用状态）。

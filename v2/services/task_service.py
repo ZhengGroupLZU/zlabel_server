@@ -35,7 +35,14 @@ from v2.services.auth_service import AuthContext
 logger = get_logger("zlabel.v2.tasks")
 
 CLAIM_FILTERS = ("free", "mine", "others")
-ORDERINGS = ("sequence", "id", "recent")
+ORDERINGS = ("sequence", "id", "recent", "random")
+
+
+def _split_states(state: str | None) -> list[str]:
+    """``"draft,rejected"`` → ``["draft", "rejected"]`` (the client's filters)."""
+    if not state:
+        return []
+    return [part.strip() for part in state.split(",") if part.strip()]
 
 
 @dataclass(frozen=True)
@@ -70,7 +77,8 @@ class TaskService:
         offset: int = 0,
         order: str = "sequence",
     ) -> tuple[list[TaskRow], int]:
-        if state is not None and state not in STATES:
+        states = _split_states(state)
+        if states and any(item not in STATES for item in states):
             raise ValidationFailed(f"unknown state: {state}")
         if claim is not None and claim not in CLAIM_FILTERS:
             raise ValidationFailed(f"unknown claim filter: {claim}")
@@ -79,8 +87,8 @@ class TaskService:
 
         with self.db.session_scope() as session:
             query = self._base_query(session, project)
-            if state is not None:
-                query = query.where(Task.state == state)
+            if states:
+                query = query.where(Task.state.in_(states))
             if group is not None:
                 query = query.where(Task.group_name == group)
             query = self._apply_claim_filter(query, claim, user_id)
@@ -107,8 +115,9 @@ class TaskService:
         """Sequence groups with their frames (for the client's timeline)."""
         with self.db.session_scope() as session:
             query = self._base_query(session, project)
-            if state is not None:
-                query = query.where(Task.state == state)
+            states = _split_states(state)
+            if states:
+                query = query.where(Task.state.in_(states))
             query = self._apply_claim_filter(query, claim, user_id)
             rows = session.scalars(query.order_by(Task.group_name, Task.day, Task.rel_path)).all()
             grouped: dict[str, list[Task]] = {}
@@ -151,6 +160,8 @@ class TaskService:
             return query.order_by(Task.id)
         if order == "recent":
             return query.order_by(Task.updated_at.desc())
+        if order == "random":
+            return query.order_by(func.random())
         # sequence: grouped frames (by group, day) first, ungrouped singles last
         return query.order_by((Task.group_name == "").asc(), Task.group_name, Task.day, Task.rel_path)
 

@@ -261,3 +261,28 @@ def test_worker_rejects_bad_payloads():
 
 
 # endregion
+
+
+def test_crop_box_moves_the_prompts_into_crop_space(engine):
+    """The detector works in crop space, so prompts must be shifted with it."""
+    captured: dict = {}
+    original = engine.predictor.predict
+
+    def record(points=None, labels=None, bboxes=None, text=None, **_ignored):
+        captured["points"] = points
+        return original(points=points, labels=labels, bboxes=bboxes, text=text)
+
+    engine.predictor.predict = record
+    engine.run(
+        job("a" * 64, crop_box=[10, 20, 50, 60], prompts={"points": [{"x": 30, "y": 45}], "labels": [1]})
+    )
+    assert captured["points"] == [(20.0, 25.0)]  # (30-10, 45-20)
+
+
+def test_state_filter_accepts_a_list():
+    """The client asks for several states at once (draft,rejected)."""
+    from v2.services.task_service import _split_states
+
+    assert _split_states("draft,rejected") == ["draft", "rejected"]
+    assert _split_states(" approved ") == ["approved"]
+    assert _split_states(None) == []

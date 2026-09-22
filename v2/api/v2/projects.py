@@ -77,8 +77,11 @@ def scan_project(
     _auth: AuthContext = Depends(require_roles("reviewer", "admin")),
     services: Services = Depends(get_services),
 ) -> ScanStats:
-    """Same as ``POST /projects/scan``: the OpenList walk is global per root."""
-    services.projects.get_project(project)
+    """Same as ``POST /projects/scan``: the OpenList walk is global per root.
+
+    The project does not have to exist yet — discovering brand new OpenList
+    directories is exactly what a scan is for.
+    """
     return ScanStats(**services.projects.scan_and_sync(force=force))
 
 
