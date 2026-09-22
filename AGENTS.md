@@ -53,12 +53,16 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
   new client-visible feature appears.
 - **Auth**: the client holds a server session token; the user's OpenList token is
   stored inside `sessions.oplist_token` and used for FS calls. Never store passwords.
-- **Whose OpenList token?** Everything a *user* does with files (frames, annotation
-  reads/writes/history, project creation) uses **that user's own token** — OpenList
-  ACLs stay in force. The service account (`ZLSERVER_OPLIST_TOKEN` or
-  username/password) is only for background work: project scanning. Getting this
-  wrong shows up as a confusing 403 "permission denied" from OpenList when the
-  service account is read-only.
+- **Whose OpenList token?** Split by direction, on purpose:
+  * **reads** (frames, annotation documents, history) use the **session user's**
+    token, so a user only sees what their own OpenList ACLs allow;
+  * **writes** (annotation + history files, project directories/marker) use the
+    **service account** (`ZLSERVER_OPLIST_TOKEN`, else `ZLSERVER_OPLIST_USERNAME` /
+    `PASSWORD`), because annotator accounts are read-only by design. The service
+    account is also the background scanner's identity.
+  A wrong token shows up as OpenList's 403 `permission denied` (the message names
+  the refused operation); the *attribution* of a save is unaffected — it comes from
+  the session (`annotations.author_id`, audit rows).
 
 ## Architecture
 

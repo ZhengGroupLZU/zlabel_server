@@ -97,9 +97,9 @@ class AnnotationService:
     def get(self, project: str, anno_id: str, token: str) -> tuple[bytes, int]:
         """Current document + version; 404 when this frame is not annotated yet.
 
-        ``token`` is the *session user's* OpenList token: annotations follow the
-        user's own ACLs, exactly like the frames (the service account is only for
-        background scans, and it usually is read-only).
+        ``token`` is the *session user's* OpenList token: reads honour the user's
+        own ACLs (a user must not see annotations of directories they cannot read).
+        Writes, by contrast, go through the service account (``_write_token``).
         """
         content = self.openlist.get_bytes(self.openlist.anno_path(project, anno_id), token)
         with self.db.session_scope() as session:
@@ -166,7 +166,9 @@ class AnnotationService:
         payload = json.dumps(document, ensure_ascii=False).encode("utf-8")
         content_hash = hashlib.sha256(payload).hexdigest()
         labels = extract_label_names(document)
-        token = auth.oplist_token  # the caller's own OpenList rights
+        # writes use the server's storage identity (ZLSERVER_OPLIST_TOKEN or the
+        # service credentials): annotators usually have read-only OpenList access
+        token = self.openlist.service_token()
 
         with self.db.session_scope() as session:
             task = session.scalar(select(Task).where(Task.anno_id == anno_id))

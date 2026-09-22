@@ -231,19 +231,25 @@ def test_unknown_task_and_project_mismatch_are_404(client, auth_headers, ol):
 # endregion
 
 
-def test_annotation_io_uses_the_session_token_not_the_service_account(client, auth_headers, ol):
-    """Players write with their own OpenList rights (the service account is a
-    background scanner and is usually read-only)."""
+def test_writes_use_the_service_account_and_reads_the_user_token(client, auth_headers, ol):
+    """Storage identity split: the server writes, users read what they may read.
+
+    Annotators usually have read-only OpenList accounts, so every write (annotation
+    document + history, project directories) goes through the service account while
+    reads honour the caller's own ACLs.
+    """
     headers = bootstrap(client, auth_headers, ol)
     anno = task_id(client, headers["admin"])
-    put(client, headers["admin"], anno, document("Root"))
 
-    assert ol.token_log, "expected authenticated OpenList calls"
-    session_tokens = {token for token in ol.token_log if token and token != "service-token"}
-    assert session_tokens, "annotation IO must not use the service token"
-    assert f"{ROOT}/projA/zlabel/{anno}.zlabel" in ol.files
-
-    # a read goes through the session token as well
     ol.token_log.clear()
-    client.get(f"/api/v2/projects/projA/annotations/{anno}", headers=headers["admin"])
+    assert put(client, headers["admin"], anno, document("Root")).status_code == 200
+    assert ol.token_log and set(ol.token_log) == {"service-token"}, ol.token_log
+    assert f"{ROOT}/projA/zlabel/{anno}.zlabel" in ol.files
+    assert f"{ROOT}/projA/zlabel/_history/{anno}/v1.zlabel" in ol.files
+
+    # reads stay on the session token
+    ol.token_log.clear()
+    assert (
+        client.get(f"/api/v2/projects/projA/annotations/{anno}", headers=headers["admin"]).status_code == 200
+    )
     assert "service-token" not in ol.token_log

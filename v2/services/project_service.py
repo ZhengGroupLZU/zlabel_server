@@ -185,18 +185,16 @@ class ProjectService:
                 raise NotFound(f"unknown project: {name}")
             return project
 
-    def create_project(
-        self, name: str, display_name: str = "", *, actor_id: int | None = None, token: str = ""
-    ) -> Project:
+    def create_project(self, name: str, display_name: str = "", *, actor_id: int | None = None) -> Project:
         """Create the OpenList directory (with the marker file) and the DB row.
 
-        ``token`` is the creator's OpenList token (falling back to the service
-        account), so the directory is created with their own rights.
+        The directory is created with the server's storage identity (the service
+        account), like every other write.
         """
         clean = name.strip().strip("/")
         if not clean or "/" in clean:
             raise Conflict("a project name must be a single path segment")
-        token = token or self.openlist.service_token()
+        token = self.openlist.service_token()
         directory = self.openlist.project_dir(clean)
         if self.openlist.exists(directory, token):
             raise Conflict(f"project already exists: {clean}")
