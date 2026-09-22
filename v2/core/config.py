@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     oplist_proj_dir: str = "/zlabel_server/projects"
     oplist_proj_name: str = ""
     project_marker: str = ".zlabel-server-project-root"
+    # scan OpenList into the task table once at startup / every N seconds (<=0 = off)
+    scan_on_startup: bool = True
     project_scan_interval: int = 300
 
     # --- inference service (separate process) ------------------------------

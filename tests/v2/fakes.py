@@ -35,6 +35,7 @@ class FakeOpenList:
         self.users: dict[str, str] = dict(users or {"rainy": "secret"})
         self.tokens: dict[str, str] = {}
         self.calls: list[tuple[str, str]] = []
+        self.token_log: list[str] = []  # which token each authenticated call used
         self.failures: dict[str, Exception] = {}
         self._seq = 0
 
@@ -111,6 +112,7 @@ class FakeFs:
 
     def _auth(self) -> None:
         self.ol.user_of(self.client.token)
+        self.ol.token_log.append(self.client.token)
 
     def dirs(self, path: str, password: str = "", force_root: bool = False):
         self._auth()
@@ -206,3 +208,26 @@ class FakeClient:
 
     def set_token(self, token: str) -> None:
         self.token = token
+
+
+class FakeInference:
+    """Stand-in for the inference worker (records jobs, returns a SamReturn)."""
+
+    def __init__(self) -> None:
+        self.jobs: list[dict] = []
+        self.fail_with: Exception | None = None
+
+    def health(self) -> dict:
+        return {"status": "ok", "detail": {"model": "FakeSAM"}}
+
+    def infer(self, job: dict) -> dict:
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.jobs.append(job)
+        return {
+            "anno_id": job.get("anno_id", ""),
+            "status": True,
+            "mode": "SAM",
+            "msg": "success",
+            "data": [{"x": 1.0, "y": 2.0, "w": 3.0, "h": 4.0}],
+        }

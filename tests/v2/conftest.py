@@ -24,6 +24,9 @@ def settings(tmp_path) -> Settings:
         oplist_token="service-token",  # background scan token
         inference_url="",
         inference_token="",
+        # deterministic tests: scanners are exercised explicitly
+        scan_on_startup=False,
+        project_scan_interval=0,
     )
 
 

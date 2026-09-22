@@ -64,6 +64,11 @@ class ValidationFailed(ApiError):
     code = "validation_error"
 
 
+class PayloadTooLarge(ApiError):
+    status_code = 413
+    code = "payload_too_large"
+
+
 class UpstreamError(ApiError):
     status_code = 502
     code = "upstream_error"

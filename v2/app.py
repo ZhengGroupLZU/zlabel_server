@@ -7,11 +7,12 @@ of monkeypatching module globals — the main structural fix over v1.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 
-from v2.api.v2 import auth, health, labels, projects
+from v2.api.v2 import annotations, auth, health, images, labels, predict, projects, tasks
 from v2.core.config import Settings, get_settings
 from v2.core.errors import install_error_handlers
 from v2.core.logging import get_logger, set_request_id
@@ -32,12 +33,34 @@ def create_app(
     settings.ensure_dirs()
     db = database or Database(settings.database_url)
 
+    async def _scan(app: FastAPI) -> None:
+        try:
+            projects = app.state.services.projects
+            await asyncio.to_thread(lambda: projects.scan_and_sync(force=True))
+        except Exception as e:  # noqa: BLE001 - startup must never die on OpenList
+            logger.warning(f"project scan unavailable: {e}")
+
+    async def _periodic_scan(app: FastAPI) -> None:
+        while True:
+            await asyncio.sleep(settings.project_scan_interval)
+            await _scan(app)
+
     @asynccontextmanager
-    async def lifespan(_app: FastAPI):
+    async def lifespan(app: FastAPI):
         logger.info(f"v{settings.version} starting (db={db.url})")
+        tasks: list[asyncio.Task] = []
+        if settings.scan_on_startup:
+            tasks.append(asyncio.create_task(_scan(app)))
+        if settings.project_scan_interval > 0:
+            tasks.append(asyncio.create_task(_periodic_scan(app)))
         try:
             yield
         finally:
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with suppress(asyncio.CancelledError):
+                    await task
             db.dispose()
 
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
@@ -58,4 +81,8 @@ def create_app(
     app.include_router(auth.router, prefix=API_PREFIX)
     app.include_router(projects.router, prefix=API_PREFIX)
     app.include_router(labels.router, prefix=API_PREFIX)
+    app.include_router(tasks.router, prefix=API_PREFIX)
+    app.include_router(annotations.router, prefix=API_PREFIX)
+    app.include_router(images.router, prefix=API_PREFIX)
+    app.include_router(predict.router, prefix=API_PREFIX)
     return app

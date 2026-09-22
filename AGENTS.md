@@ -27,8 +27,8 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 | M0 | v1 frozen baseline (`fc04ef4`) — done |
 | M1 | v2 skeleton: app factory, config/errors/logging, models + alembic, `/api/v2/health` — done |
 | M1b | inference assets → `inference/`, vendored SDK → `v2/vendor/`, v1 deleted, infra/docs — done |
-| M2 | services + v2 endpoints (auth/projects/tasks/annotations/images/labels/progress) — **next** |
-| M3 | inference worker process + `InferenceClient` (embedding cache by image sha256, health, metrics) |
+| M2 | services + v2 endpoints (auth/projects/tasks/annotations/images/labels/progress/predict) — done |
+| M3 | inference worker process (`/infer` + embedding cache by image sha256, health, metrics) — **next** |
 | M4 | desktop client switches to `/api/v2` (`docs/client-migration-v2.md`) |
 | M5 | acceptance (DoD §14) |
 
@@ -61,9 +61,17 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
   annotation_versions, audit_log, link tables), `migrations/` (alembic).
   State machine: `draft → submitted → approved|rejected`; claim trio
   `claimed_by/claimed_at/lease_expires_at`.
-- `v2/api/v2/` — routers only (thin); `v2/services/` — business logic;
-  `v2/adapters/` — OpenList + inference clients; `v2/vendor/openlist_api/` —
-  vendored third-party SDK (do not edit; wrap it in an adapter).
+- `v2/api/v2/` — routers only (thin): `auth`, `projects`, `labels`, `tasks`,
+  `annotations`, `images`, `predict`, `health`; shared dependencies live in
+  `v2/api/deps.py` (`get_services`, `get_auth`, `require_roles`).
+- `v2/services/` — business logic: `auth_service` (sessions/roles),
+  `project_service` (discovery/sync, labels, progress), `task_service`
+  (listing, claim+lease, submit/review), `annotation_service` (versioned save,
+  history), `image_store` (content-addressed uploads), `grouping`, `audit`,
+  `container` (the `Services` dataclass built by `create_app`).
+- `v2/adapters/` — `openlist.py` (the only OpenList boundary, token-explicit: one
+  client per call) and `inference.py` (`InferenceClient` → the worker's `/infer`).
+- `v2/vendor/openlist_api/` — vendored third-party SDK (do not edit; wrap it).
 - `inference/` — `sam_ort/` (Predictor/SamRunner/Sam2Runner/Sam3Runner),
   `worker.py` (`ZSamWorker`: prompt → mask → contour post-processing),
   `ztypes.py` (wire types + `AutoMode`/`ReturnType`), `config.py`
@@ -85,7 +93,18 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
   error whose message contains "not found" to `NotFoundError(404)`. Never turn that
   into a blanket 500.
 - `tests/conftest.py` is shared (image fixtures + `FakePredictor`); v2 API tests use
-  `tests/v2/conftest.py` (in-memory DB, no network).
+  `tests/v2/conftest.py` (in-memory DB, fake OpenList, `auth_headers` helper) and
+  `tests/v2/fakes.py` (`FakeOpenList`, `FakeInference`).
+- The API suite disables scanners (`scan_on_startup=False`, `project_scan_interval=0`)
+  so tests stay deterministic; `tests/v2/test_startup.py` covers the scan itself and
+  must use a **file-backed** DB — the in-memory StaticPool connection cannot be
+  shared with the scan thread.
+- Claim state: `draft → submitted → approved|rejected` (`reopen` pulls back to draft).
+  A claim carries `lease_expires_at`; an expired lease is claimable by anyone, a live
+  one answers 409 `lease_conflict` with the holder + expiry. Saves renew the lease and
+  a save without `base_version` is only accepted while the task has no stored version.
+- `TaskRow` resolves the holder/reviewer names with one extra query: reading them via
+  `task.claimer` goes stale the moment `claimed_by` is mutated in the same session.
 - `.env*` is gitignored except `.env.example`; the real config is `.env.v2`.
 
 ## Decisions (already agreed with the user — do not relitigate)

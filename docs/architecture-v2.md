@@ -125,12 +125,16 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 | `POST /api/v2/tasks/{anno_id}/submit` | 持有者 | 提交复核 |
 | `POST /api/v2/tasks/{anno_id}/review` | reviewer/admin | `{decision: approve\|reject, note}` |
 | `GET /api/v2/projects/{p}/groups` | session | 序列分组 + 帧列表（时间轴/拷贝上一帧用，服务端给全量，不受分页截断） |
-| `GET /api/v2/projects/{p}/images/{rel_path:path}` | session | 取图，支持 `ETag`/`If-None-Match`；**无副作用（不再设置模型图）** |
+| `GET /api/v2/projects/{p}/my-stats` | session | 我名下各状态的任务数 |
+| `POST /api/v2/tasks/{anno_id}/reopen` | reviewer/admin | 已通过/已提交退回草稿（复核者改主意） |
+| `GET /api/v2/auth/users` · `PUT /api/v2/auth/users/{id}/role` | admin | 用户列表 / 改角色（改角色会撤销该用户会话） |
+| `GET /api/v2/projects/{p}/images/{rel_path:path}` | session | 取图（用**会话用户自己的** OpenList token），支持 `ETag`/`If-None-Match`；**无副作用** |
+| `GET /api/v2/images/{sha256}` | session | 取回客户端上传过（内容寻址）的帧 |
 | `PUT /api/v2/projects/{p}/images/{rel_path:path}` | session | 本地上传（本地数据集 + 远端推理） |
 | `GET /api/v2/projects/{p}/annotations/{anno_id}` | session | 200 + `ETag: v{n}` / 404 = 未标注 |
 | `PUT /api/v2/projects/{p}/annotations/{anno_id}` | 持有者 | body 含 `base_version`；200 `{version}` / 409 冲突（`server_version, updated_by, updated_at`）/ `force=true` 仅 reviewer+ |
-| `GET /api/v2/projects/{p}/annotations/{anno_id}/versions` | session | 版本历史（v2 起，历史从新版本号开始累积） |
-| `POST /api/v2/projects/{p}/predict` | session | 交互/文本推理，**无状态**：`{image_sha256 or image, points/labels, rects, texts, threshold, mode, return_type, crop_box}` |
+| `GET /api/v2/projects/{p}/annotations/{anno_id}/versions[/{n}]` | session | 版本历史 / 某一版内容（历史文件存 `zlabel/_history/<anno_id>/v<n>.zlabel`） |
+| `POST /api/v2/projects/{p}/predict` | session | 交互/文本推理，**无状态**：multipart `data`(JSON) + 可选 `image`；`data` 里可带 `rel_path`（服务端去 OpenList 取）或 `image_sha256`（取上传缓存） |
 | `GET /api/v2/projects/{p}/progress` | session | `{total,draft,submitted,approved,rejected}`，`by_user=true` 时带按人明细 |
 
 错误码约定：`404 not_found`（未标注/未找到，客户端可安全新建）、`409 conflict`（版本冲突或任务被他人领取，`detail.claimed_by` 区分）、`502 upstream_error`（OpenList/推理进程失败）、`503 inference_unavailable`。
@@ -153,7 +157,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
                                                                                     └─ 单/多 GPU 队列
 ```
 
-- job：`{job_id, image_sha256, image_ref|image_b64, prompts, threshold, mode, return_type, crop_box, model}`；同步等待（HTTP，超时可配），worker 内部串行或按 GPU 并发。
+- job（API → worker，`POST /infer`，Bearer 内部 token）：`{job_id, anno_id, image_sha256, image_b64, model, prompts{points,labels,rects,texts}, threshold, mode, return_type, crop_box}`；同步等待（HTTP，超时 `ZLV2_INFERENCE_TIMEOUT`），worker 内部串行或按 GPU 并发。M3 可再加 `image_url` 拉取模式，避免大图重复上传。
 - **embedding 缓存 key = 图像内容 sha256**（跨项目去重），LRU + 可配容量；同一张图第二次点击直接复用 embedding → 从根上消除 v1"全局当前帧"错帧问题。
 - worker 暴露 `GET /health`（模型已加载/设备/队列深度）与 `GET /metrics`（p50/p95、缓存命中率）。
 - 模型参数沿用 v1：`ZLV2_MODEL_NAME/DIR/BACKEND`、SAM3 conf/iou、轮廓后处理参数（与桌面端逐像素对齐的预处理逻辑保持不变）。
@@ -195,10 +199,8 @@ v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。
 |---|---|---|
 | M0 | v1 冻结基线（已做：`fc04ef4`） | `pytest -m "not slow"` 除真 GPU 用例全绿 |
 | M1 | v2 骨架（config/db/models/security/health）+ alembic 初始迁移 | ✅ 已完成：`/api/v2/health` 可用，`upgrade head`/`downgrade base`/`alembic check` 全绿 |
-| M2 | 服务层 + v2 端点（auth/projects/tasks/annotations/images/labels/progress）+ 假 OpenList/假推理测试 | v2 用例全绿（含 role/lease/conflict） |
-| M3 | 推理进程 + InferenceClient（embedding 缓存、health、metrics） | 重复请求命中缓存；API 重启不影响 worker |
 | M1b | 资产搬迁（`inference/`、`v2/vendor/`）+ v1 彻底删除 + 基建/文档更新 | ✅ 已完成：`app/` 不存在，推理回归测试全绿 |
-| M2 | 服务层 + `/api/v2` 端点（auth/projects/tasks/annotations/images/labels/progress）+ hermetic 测试 | v2 用例全绿（含 role/lease/conflict） |
+| M2 | 服务层 + `/api/v2` 端点（auth/projects/tasks/annotations/images/labels/progress/predict）+ hermetic 测试 | ✅ 已完成：109 个 v2 用例（role/lease/conflict/版本/预测） |
 | M3 | 推理进程 + InferenceClient（embedding 缓存、health、metrics） | 重复请求命中缓存；API 重启不影响 worker |
 | M4 | 桌面端切 v2（见 `client-migration-v2.md`） | 客户端全部调用走 `/api/v2` |
 | M5 | 验收：DoD §14 全项通过 | 交付 |

@@ -8,11 +8,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from v2.adapters.inference import InferenceClient
 from v2.adapters.openlist import OpenListAdapter
 from v2.core.config import Settings
 from v2.db.base import Database
+from v2.services.annotation_service import AnnotationService
 from v2.services.auth_service import AuthService
+from v2.services.image_store import ImageStore
 from v2.services.project_service import ProjectService
+from v2.services.task_service import TaskService
 
 
 @dataclass
@@ -22,10 +26,18 @@ class Services:
     openlist: OpenListAdapter
     auth: AuthService = field(init=False)
     projects: ProjectService = field(init=False)
+    tasks: TaskService = field(init=False)
+    annotations: AnnotationService = field(init=False)
+    images: ImageStore = field(init=False)
+    inference: InferenceClient = field(init=False)
 
     def __post_init__(self) -> None:
         self.auth = AuthService(self.db, self.openlist, self.settings)
         self.projects = ProjectService(self.db, self.openlist, self.settings)
+        self.tasks = TaskService(self.db, self.settings)
+        self.annotations = AnnotationService(self.db, self.openlist, self.projects, self.tasks, self.settings)
+        self.images = ImageStore(self.settings)
+        self.inference = InferenceClient(self.settings)
 
     @classmethod
     def build(cls, settings: Settings, db: Database, *, openlist: OpenListAdapter | None = None) -> Services:
