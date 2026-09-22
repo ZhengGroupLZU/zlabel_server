@@ -19,7 +19,9 @@ dependencies = [
 ]
 
 [project.scripts]
-# server administration (users, storage, layout migration)
+# Server administration (users, storage, layout migration). A dev checkout uses
+# `uv run python -m v2.cli ...` instead: uv skips entry points for unpackaged
+# projects (flat layout with two top-level packages).
 zlabel-server = "v2.cli:main"
 
 [[tool.uv.index]]

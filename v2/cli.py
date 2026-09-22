@@ -1,10 +1,10 @@
 """Server administration CLI (no web UI needed).
 
-    uv run zlabel-server user add alice --role reviewer
-    uv run zlabel-server user ls
-    uv run zlabel-server user passwd alice
-    uv run zlabel-server storage usage
-    uv run zlabel-server migrate-layout --root /data/zlabel --dry-run
+    uv run python -m v2.cli user add alice --role reviewer
+    uv run python -m v2.cli user ls
+    uv run python -m v2.cli user passwd alice
+    uv run python -m v2.cli storage usage
+    uv run python -m v2.cli migrate-layout --root /data/zlabel --dry-run
 
 The CLI talks to the database directly (same settings as the API), so it works
 while the server is running and needs no admin session.

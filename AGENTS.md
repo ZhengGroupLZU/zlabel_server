@@ -8,7 +8,7 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 ## Commands
 
 - Setup: `uv sync` (Python 3.13 via `.python-version`)
-- Admin CLI: `uv run zlabel-server user add <name> --role reviewer|annotator|admin` ·
+- Admin CLI: `uv run python -m v2.cli user add <name> --role reviewer|annotator|admin` ·
   `user ls` · `user passwd <name>` · `user role <name> <role>` · `storage usage` ·
   `migrate-layout --root <storage-root> [--dry-run]` (moves `<project>/zlabel` to
   `<project>/.zlabel/annos`; see `docs/plan-selfhosted-storage.md`)

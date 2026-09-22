@@ -39,10 +39,10 @@
 
 1. 把 OpenList 的数据目录挂到服务器（或 rsync 过来），设为 `ZLSERVER_STORAGE_ROOT`。
 2. **先保持** `ZLSERVER_ANNO_DIR=zlabel`、`ZLSERVER_STORAGE_BACKEND=openlist` 不动，确认服务端能读。
-3. `uv run zlabel-server migrate-layout --root <STORAGE_ROOT> --dry-run` 看计划，确认后去掉 `--dry-run`。
+3. `uv run python -m v2.cli migrate-layout --root <STORAGE_ROOT> --dry-run` 看计划，确认后去掉 `--dry-run`。
 4. `ZLSERVER_STORAGE_BACKEND=local`（`ZLSERVER_ANNO_DIR` 恢复默认 `.zlabel/annos`），重启 → 扫描一次（`POST /projects/scan`）即可看到全部任务。
 5. 账号：`ZLSERVER_IDENTITY=local` + `ZLSERVER_BOOTSTRAP_ADMIN/PASSWORD` 建首个管理员；之后用
-   `uv run zlabel-server user add <名字> --role reviewer|annotator` 建人。
+   `uv run python -m v2.cli user add <名字> --role reviewer|annotator` 建人。
 6. 回滚：反向运行 `migrate-layout --source .zlabel/annos --target zlabel`，并把两个开关切回。
 
 ## 必须配套的运维
