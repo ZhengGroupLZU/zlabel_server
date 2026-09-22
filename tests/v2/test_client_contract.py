@@ -183,9 +183,9 @@ def test_annotation_roundtrip_and_optimistic_locking(api, ol, client_api, tmp_pa
     assert api.version_of(anno_id) is None  # must reload before retrying
 
     # a reviewer may force it, an annotator may not
-    ol.users["bob"] = "pw"
-    bob = client_api.ZLServerApiClient("bob", "pw", api.sam_api)
-    assert bob.login("bob", "pw"), bob.last_login_error
+    ol.users["bob"] = "pw-padding"
+    bob = client_api.ZLServerApiClient("bob", "pw-padding", api.sam_api)
+    assert bob.login("bob", "pw-padding"), bob.last_login_error
     assert bob.role == "annotator"
     assert api.save_zlabel(str(document), force=True, project=PROJ).ok
 
@@ -193,9 +193,9 @@ def test_annotation_roundtrip_and_optimistic_locking(api, ol, client_api, tmp_pa
 def test_annotator_gets_rbac_instead_of_errors(api, ol, client_api):
     """The client must degrade gracefully when the role is not allowed to scan."""
     _login(api)  # the first account of a fresh database becomes admin
-    ol.users["bob"] = "pw"
-    bob = client_api.ZLServerApiClient("bob", "pw", api.sam_api)
-    assert bob.login("bob", "pw"), bob.last_login_error
+    ol.users["bob"] = "pw-padding"
+    bob = client_api.ZLServerApiClient("bob", "pw-padding", api.sam_api)
+    assert bob.login("bob", "pw-padding"), bob.last_login_error
     assert bob.role == "annotator" and bob.is_reviewer is False
     assert bob.scan(PROJ) is False  # 403 -> no scan, not an exception
 
@@ -291,9 +291,9 @@ def _ready_frame(api, ol, tmp_path) -> tuple[str, str]:
 def test_claim_lease_and_review_roundtrip(api, ol, client_api, tmp_path):
     """The whole workflow the desktop drives: claim -> save -> submit -> review."""
     _login(api)
-    ol.users["bob"] = "pw"
-    reviewer = client_api.ZLServerApiClient("bob", "pw", api.sam_api)
-    assert reviewer.login("bob", "pw"), reviewer.last_login_error
+    ol.users["bob"] = "pw-padding"
+    reviewer = client_api.ZLServerApiClient("bob", "pw-padding", api.sam_api)
+    assert reviewer.login("bob", "pw-padding"), reviewer.last_login_error
     assert reviewer.role == "annotator"  # only the first account is admin
 
     anno_id, document = _ready_frame(api, ol, tmp_path)
@@ -366,9 +366,9 @@ def test_lease_expiry_and_takeover(client, api, ol, client_api, tmp_path):
     from v2.db.models import Task, utcnow
 
     _login(api)
-    ol.users["bob"] = "pw"
-    second = client_api.ZLServerApiClient("bob", "pw", api.sam_api)
-    assert second.login("bob", "pw"), second.last_login_error
+    ol.users["bob"] = "pw-padding"
+    second = client_api.ZLServerApiClient("bob", "pw-padding", api.sam_api)
+    assert second.login("bob", "pw-padding"), second.last_login_error
 
     anno_id, document = _ready_frame(api, ol, tmp_path)
     assert api.claim(anno_id).ok

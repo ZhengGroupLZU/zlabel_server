@@ -6,6 +6,7 @@ in the shape of the old OpenList fake, so most seeding call sites stayed unchang
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import numpy as np
@@ -26,7 +27,8 @@ class LocalBackendHarness:
         self.root.mkdir(parents=True, exist_ok=True)
         self.files: dict[str, bytes] = _FileMap(self)
         self.dirs: set[str] = {self.VIRTUAL_ROOT}
-        self.users: dict[str, str] = {}  # name -> password, created on first login
+        self.users: dict[str, str] = _UsersMap(self)  # name -> password; registers the account
+        self.identity = None  # set by the services fixture (local identity)
 
     def disk_path(self, path: str) -> Path:
         """Map a test-facing (OpenList style, absolute) path onto the storage root."""
@@ -48,6 +50,13 @@ class LocalBackendHarness:
         self._remember_parents(path)
         return path
 
+    def create_account(self, name: str, password: str) -> None:
+        """Create the account behind ``users[name]`` (no-op without an identity)."""
+        if self.identity is None:
+            return
+        with contextlib.suppress(Exception):  # already registered / bootstrap admin
+            self.identity.create_user(name, password)
+
     def images(self) -> list[str]:
         return sorted(self.files)
 
@@ -55,6 +64,18 @@ class LocalBackendHarness:
         parts = str(path).strip("/").split("/")
         for i in range(1, len(parts)):
             self.dirs.add("/" + "/".join(parts[:i]))
+
+
+class _UsersMap(dict):
+    """``harness.users``: assigning a password registers that account."""
+
+    def __init__(self, harness: LocalBackendHarness) -> None:
+        super().__init__()
+        self._harness = harness
+
+    def __setitem__(self, name: str, password: str) -> None:
+        super().__setitem__(name, password)
+        self._harness.create_account(name, password)
 
 
 class _FileMap:

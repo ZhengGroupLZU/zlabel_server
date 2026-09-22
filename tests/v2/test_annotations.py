@@ -229,27 +229,3 @@ def test_unknown_task_and_project_mismatch_are_404(client, auth_headers, ol):
 
 
 # endregion
-
-
-def test_writes_use_the_service_account_and_reads_the_user_token(client, auth_headers, ol):
-    """Storage identity split: the server writes, users read what they may read.
-
-    Annotators usually have read-only OpenList accounts, so every write (annotation
-    document + history, project directories) goes through the service account while
-    reads honour the caller's own ACLs.
-    """
-    headers = bootstrap(client, auth_headers, ol)
-    anno = task_id(client, headers["admin"])
-
-    ol.token_log.clear()
-    assert put(client, headers["admin"], anno, document("Root")).status_code == 200
-    assert ol.token_log and set(ol.token_log) == {"service-token"}, ol.token_log
-    assert f"{ROOT}/projA/.zlabel/annos/{anno}.zlabel" in ol.files
-    assert f"{ROOT}/projA/.zlabel/annos/_history/{anno}/v1.zlabel" in ol.files
-
-    # reads stay on the session token
-    ol.token_log.clear()
-    assert (
-        client.get(f"/api/v2/projects/projA/annotations/{anno}", headers=headers["admin"]).status_code == 200
-    )
-    assert "service-token" not in ol.token_log

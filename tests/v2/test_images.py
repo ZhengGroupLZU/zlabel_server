@@ -23,9 +23,6 @@ def test_get_image_uses_etag_cache(client, auth_headers, ol: LocalBackendHarness
     )
     assert cached.status_code == 304 and cached.content == b""
 
-    # reads use the *user's* OpenList token, not the background service token
-    assert ol.token_log[-1] != "service-token"
-
 
 def test_get_image_missing_is_404(client, auth_headers, ol):
     seed(ol, "projA", files=("a.png",))

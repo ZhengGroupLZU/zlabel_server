@@ -54,8 +54,9 @@ def ol(settings: Settings) -> LocalBackendHarness:
 
 
 @pytest.fixture
-def services(settings: Settings, db: Database) -> Services:
+def services(settings: Settings, db: Database, ol: LocalBackendHarness) -> Services:
     built = Services.build(settings, db, openlist=LocalDiskBackend(settings))
+    ol.identity = built.auth.identity
     built.auth.identity.create_user("rainy", "secret", admin=True)
     return built
 
