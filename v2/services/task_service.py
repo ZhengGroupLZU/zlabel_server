@@ -251,10 +251,19 @@ class TaskService:
             return self._rows(session, [task])[0]
 
     def heartbeat(self, auth: AuthContext, anno_id: str) -> TaskRow:
-        """Extend the lease; only the current holder may call it."""
+        """Extend a *live* lease.
+
+        Only the current holder may renew, and only while the lease has not
+        expired: a lapsed lease is a lapsed lease (re-claim it instead). Submitting
+        a frame clears the lease, so a heartbeat after that is a conflict too.
+        """
         with self.db.session_scope() as session:
             task = self._must_get(session, anno_id)
-            if task.claimed_by != auth.user_id:
+            if (
+                task.claimed_by != auth.user_id
+                or task.lease_expires_at is None
+                or task.lease_expires_at <= utcnow()
+            ):
                 raise self._lease_conflict(session, task)
             task.lease_expires_at = utcnow() + self._lease()
             return self._rows(session, [task])[0]

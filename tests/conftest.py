@@ -66,3 +66,38 @@ class FakePredictor:
 @pytest.fixture
 def fake_predictor() -> FakePredictor:
     return FakePredictor()
+
+
+# --- hermetic configuration ------------------------------------------------- #
+# A developer's real ``.env.v2`` holds live hosts and credentials. Capture the
+# shipped defaults first, then make the whole suite ignore the file: env *vars*
+# still work (tests set them explicitly), the file never leaks in.
+from inference.config import InferenceSettings as _WorkerSettings  # noqa: E402
+from v2.core.config import Settings as _ApiSettings  # noqa: E402
+
+ENV_FILE_DEFAULTS = {
+    "api": _ApiSettings.model_config.get("env_file"),
+    "worker": _WorkerSettings.model_config.get("env_file"),
+}
+ENV_PREFIX_DEFAULTS = {
+    "api": _ApiSettings.model_config.get("env_prefix"),
+    "worker": _WorkerSettings.model_config.get("env_prefix"),
+}
+
+
+@pytest.fixture
+def shipped_env_file() -> dict[str, str | None]:
+    """The env-file names the app ships with (captured before the hermetic patch).
+
+    Defined as a fixture on purpose: importing ``tests.conftest`` from a test would
+    execute the module a second time, when the patch below is already active.
+    """
+    return dict(ENV_FILE_DEFAULTS)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_env_file(monkeypatch):
+    """Do not read ``.env.v2`` (nor any other env file) during tests."""
+    for cls in (_ApiSettings, _WorkerSettings):
+        monkeypatch.setattr(cls, "model_config", {**cls.model_config, "env_file": None})
+    yield

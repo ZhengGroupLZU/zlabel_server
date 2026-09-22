@@ -259,3 +259,24 @@ def test_random_order_returns_the_requested_page(client, auth_headers, ol):
         "/api/v2/projects/projA/tasks", params={"order": "random", "limit": 2}, headers=headers["admin"]
     ).json()
     assert page["total"] == 3 and len(page["items"]) == 2
+
+
+def test_heartbeat_needs_a_live_lease(client, auth_headers, ol, db):
+    """A lapsed or released lease cannot be renewed - re-claim instead."""
+    headers = bootstrap(client, auth_headers, ol)
+    anno = task_id(client, headers["admin"])
+    client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
+
+    with db.session_scope() as session:
+        session.scalar(select(Task)).lease_expires_at = utcnow() - timedelta(seconds=1)
+    expired = client.post(f"/api/v2/tasks/{anno}/heartbeat", headers=headers["admin"])
+    assert expired.status_code == 409 and expired.json()["code"] == "lease_conflict"
+
+    # re-claiming works (nobody else took it), and then the heartbeat is fine again
+    assert client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"]).status_code == 200
+    assert client.post(f"/api/v2/tasks/{anno}/heartbeat", headers=headers["admin"]).status_code == 200
+
+    # submitting clears the lease, so there is nothing left to renew
+    add_annotation(db, anno)
+    client.post(f"/api/v2/tasks/{anno}/submit", headers=headers["admin"])
+    assert client.post(f"/api/v2/tasks/{anno}/heartbeat", headers=headers["admin"]).status_code == 409

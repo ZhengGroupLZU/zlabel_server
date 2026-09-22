@@ -61,6 +61,8 @@ class _RequestsToTestClient:
 
     def __init__(self, test_client) -> None:
         self.client = test_client
+        # the client uses both ``requests.RequestException`` and ``requests.exceptions``
+        self.RequestException = requests.RequestException
         self.exceptions = requests.exceptions
         self.calls: list[tuple[str, str]] = []
         self.timeouts: list[tuple[str, str, float | None]] = []
@@ -87,6 +89,9 @@ class _RequestsToTestClient:
         self.timeouts.append((method, parsed.path, timeout))
         self.calls.append((method, parsed.path))
         return self.client.request(method, parsed.path, **request_kwargs)
+
+    def request(self, method: str, url: str, **kwargs):
+        return self._call(method.upper(), url, **kwargs)
 
     def get(self, url: str, **kwargs):
         return self._call("GET", url, **kwargs)
@@ -270,3 +275,78 @@ def test_frame_calls_do_not_use_the_control_timeout(api, ol, client, client_api,
     assert routed.timeouts[-1][2] == 10.0
     api.get_image("a.png", project=PROJ)
     assert routed.timeouts[-1][2] is None
+
+
+def _ready_frame(api, ol, tmp_path) -> tuple[str, str]:
+    """One project + one frame with a saved annotation; returns (anno_id, document path)."""
+    seed(ol, PROJ, files=("images/dish01/D1.png",))
+    api.scan(PROJ)
+    anno_id = api.get_tasks(PROJ)["items"][0]["anno_id"]
+    document = tmp_path / f"{anno_id}.zlabel"
+    document.write_text('{"results": {"r1": {"labels": [{"name": "Root"}]}}}', encoding="utf-8")
+    assert api.save_zlabel(str(document), project=PROJ).ok
+    return anno_id, str(document)
+
+
+def test_claim_lease_and_review_roundtrip(api, ol, client_api, tmp_path):
+    """The whole workflow the desktop drives: claim -> save -> submit -> review."""
+    _login(api)
+    ol.users["bob"] = "pw"
+    reviewer = client_api.ZLServerApiClient("bob", "pw", api.sam_api)
+    assert reviewer.login("bob", "pw"), reviewer.last_login_error
+    assert reviewer.role == "annotator"  # only the first account is admin
+
+    anno_id, document = _ready_frame(api, ol, tmp_path)
+
+    # the frame carries the annotator's lease; a second client is refused with detail
+    claim = api.claim(anno_id)
+    assert claim.ok and claim.task["claimed_by"] == "rainy"
+    assert claim.task["lease_expires_at"]
+
+    taken = reviewer.claim(anno_id)
+    assert taken.status == 409 and taken.claimed_by == "rainy" and taken.lease_expires_at
+    assert reviewer.claim(anno_id, force=True).status == 403  # annotators cannot force
+
+    # renewing, then handing in
+    assert api.heartbeat(anno_id).ok
+    assert api.submit(anno_id).ok
+    assert api.heartbeat(anno_id).status == 409  # the lease was released on submit
+
+    # a non-reviewer cannot decide
+    assert reviewer.review(anno_id, "approve").status == 403
+    rejected = api.review(anno_id, "reject", "wrong dish")
+    assert (
+        rejected.ok and rejected.task["state"] == "rejected" and rejected.task["review_note"] == "wrong dish"
+    )
+
+    # rework, resubmit, approve, reopen
+    assert api.save_zlabel(document, project=PROJ).ok
+    assert api.submit(anno_id).ok
+    approved = api.review(anno_id, "approve")
+    assert approved.ok and approved.task["state"] == "approved"
+    reopened = api.reopen(anno_id, "another look")
+    assert reopened.ok and reopened.task["state"] == "draft"
+
+    # progress + my stats reflect it
+    assert api.get_progress(PROJ)["draft"] == 1
+    assert api.my_stats(PROJ)["draft"] == 1
+    task = api.get_task(anno_id)
+    assert task["state"] == "draft" and task["version"] >= 2
+
+
+def test_version_history_contract(api, ol, tmp_path):
+    """Every save is listed, and an old document can be fetched back."""
+    _login(api)
+    anno_id, document = _ready_frame(api, ol, tmp_path)
+    assert api.save_zlabel(document, project=PROJ).ok  # v2
+    assert api.save_zlabel(document, project=PROJ).ok  # v3
+
+    versions = api.annotation_versions(anno_id, PROJ)
+    assert [v["version"] for v in versions] == [3, 2, 1]
+    assert all(v["author"] == "rainy" for v in versions)
+
+    first = api.annotation_version(anno_id, 1, PROJ)
+    assert first is not None and "Root" in first
+    current = api.annotation_version(anno_id, 3, PROJ)
+    assert current is not None and "Root" in current
+    assert api.annotation_version(anno_id, 99, PROJ) is None
