@@ -48,3 +48,15 @@ def test_health_probes_are_unconfigured_without_urls(settings):
 def test_request_id_is_echoed(client):
     resp = client.get("/api/v2/health", headers={"X-Request-ID": "abc123"})
     assert resp.headers["X-Request-ID"] == "abc123"
+
+
+def test_v1_era_clients_are_told_to_upgrade(client):
+    """Old desktop builds must get an explanation, not a bare 404."""
+    resp = client.get("/api/v1/get_tasks")
+    assert resp.status_code == 410
+    body = resp.json()
+    assert body["code"] == "api_version_removed"
+    assert "v2" in body["message"] and body["detail"]["path"] == "/api/v1/get_tasks"
+
+    # and the endpoints that do exist are untouched
+    assert client.get("/api/v2/health").status_code == 200

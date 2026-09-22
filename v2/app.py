@@ -11,6 +11,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from v2.api.v2 import annotations, auth, health, images, internal, labels, predict, projects, tasks
 from v2.core.config import Settings, get_settings
@@ -76,6 +77,20 @@ def create_app(
         response = await call_next(request)
         response.headers["X-Request-ID"] = rid
         return response
+
+    @app.api_route(
+        "/api/v1/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False
+    )
+    async def api_v1_removed(rest: str):
+        """A v1-era client gets a clear "upgrade me", not a bare 404."""
+        return JSONResponse(
+            status_code=410,
+            content={
+                "code": "api_version_removed",
+                "message": "This server only speaks /api/v2 (the v1 API was removed). Please update the desktop client.",
+                "detail": {"path": f"/api/v1/{rest}"},
+            },
+        )
 
     app.include_router(health.router, prefix=API_PREFIX)
     app.include_router(auth.router, prefix=API_PREFIX)
