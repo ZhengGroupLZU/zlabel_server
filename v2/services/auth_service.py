@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 
-from v2.adapters.openlist import OpenListAdapter
+from v2.adapters.identity import IdentityProvider
 from v2.core.config import Settings
 from v2.core.errors import Forbidden, Unauthorized
 from v2.core.logging import get_logger
@@ -98,20 +98,27 @@ class AuthService:
     def __init__(
         self,
         db: Database,
-        openlist: OpenListAdapter,
+        identity: IdentityProvider,
         settings: Settings,
         cache: SessionCache | None = None,
     ) -> None:
         self.db = db
-        self.openlist = openlist
+        self.identity = identity
         self.settings = settings
         self.cache = cache or SessionCache(settings.session_cache_seconds)
 
     # region login / logout
     def login(self, username: str, password: str, client_info: str = "") -> tuple[str, AuthContext, datetime]:
-        """Verify against OpenList, upsert the user, issue a session token."""
-        oplist_token = self.openlist.login(username, password)  # raises Unauthorized
-        remote = self.openlist.current_user(oplist_token)
+        """Verify through the identity provider, upsert the user, issue a session.
+
+        ``LocalIdentity`` checks our own scrypt hash; ``OpenListIdentity`` proxies
+        the external service and hands back the user's token (kept in the session
+        so per-user file ACLs still work while OpenList is in use).
+        """
+        remote = self.identity.verify(username, password)
+        if remote is None:
+            raise Unauthorized("the server rejected these credentials")
+        oplist_token = str(remote.get("token") or "")
         name = (remote.get("name") or username).strip()
 
         with self.db.session_scope() as session:
@@ -212,8 +219,13 @@ class AuthService:
 
     # region internals
     def _upsert_user(self, session, remote: dict, name: str) -> User:
-        """Find or create the local row for the authenticated OpenList account."""
-        oplist_user_id = remote.get("id") or ""
+        """Find or create the local row for the authenticated account.
+
+        ``oplist_user_id`` holds ``"<provider>:<subject>"`` (the column name is kept
+        for compatibility with existing databases).
+        """
+        subject = str(remote.get("id") or name.lower())
+        oplist_user_id = subject if ":" in subject else f"{self.identity.kind}:{subject}"
         user = None
         if oplist_user_id:
             user = session.scalar(select(User).where(User.oplist_user_id == oplist_user_id))
@@ -223,7 +235,7 @@ class AuthService:
             is_first = session.scalar(select(func.count()).select_from(User)) == 0
             role = ROLE_ADMIN if (is_first or self._is_bootstrap_admin(name)) else ROLE_ANNOTATOR
             user = User(
-                oplist_user_id=oplist_user_id or f"name:{name.lower()}",
+                oplist_user_id=oplist_user_id,
                 name=name.lower(),
                 email=remote.get("email") or "",
                 role=role,

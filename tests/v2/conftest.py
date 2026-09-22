@@ -63,6 +63,37 @@ def client(app) -> Iterator[TestClient]:
 
 
 @pytest.fixture
+def local_settings(settings: Settings, tmp_path) -> Settings:
+    """The same app, but with the local disk backend (no OpenList for storage)."""
+    return settings.model_copy(
+        update={
+            "storage_backend": "local",
+            "storage_root": str(tmp_path / "storage"),
+            "identity": "local",
+            "oplist_token": "",  # nothing needs an OpenList credential any more
+        }
+    )
+
+
+@pytest.fixture
+def local_client(local_settings: Settings, db: Database) -> Iterator[TestClient]:
+    """A server with **no OpenList at all**: local storage + local accounts.
+
+    ``rainy``/``secret`` is created directly in the database, which is what the
+    bootstrap path does in production.
+    """
+    from v2.adapters.local_disk import LocalDiskBackend
+
+    local_settings = local_settings.model_copy(update={"identity": "local"})
+    local_settings.ensure_dirs()
+    backend = LocalDiskBackend(local_settings)
+    services = Services.build(local_settings, db, openlist=backend, identity="local")
+    services.auth.identity.create_user("rainy", "secret", admin=True)
+    with TestClient(create_app(local_settings, db, services=services)) as test_client:
+        yield test_client
+
+
+@pytest.fixture
 def auth_headers() -> callable:
     """``login(client)`` → Authorization headers for a given account."""
 

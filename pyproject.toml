@@ -18,6 +18,10 @@ dependencies = [
     "sqlalchemy>=2.0.43",
 ]
 
+[project.scripts]
+# server administration (users, storage, layout migration)
+zlabel-server = "v2.cli:main"
+
 [[tool.uv.index]]
 name = "aliyun"
 url = "https://mirrors.aliyun.com/pypi/simple"

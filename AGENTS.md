@@ -8,6 +8,10 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 ## Commands
 
 - Setup: `uv sync` (Python 3.13 via `.python-version`)
+- Admin CLI: `uv run zlabel-server user add <name> --role reviewer|annotator|admin` ·
+  `user ls` · `user passwd <name>` · `user role <name> <role>` · `storage usage` ·
+  `migrate-layout --root <storage-root> [--dry-run]` (moves `<project>/zlabel` to
+  `<project>/.zlabel/annos`; see `docs/plan-selfhosted-storage.md`)
 - Migrations: `uv run alembic upgrade head` · `uv run alembic revision --autogenerate -m "msg"`
   (URL comes from `ZLSERVER_DATABASE_URL`, `-x db_url=...` overrides; never put it in `alembic.ini`)
 - Dev server: `uv run fastapi run v2/main.py` (entrypoint `v2/main.py`; OpenAPI at `/docs`).
@@ -84,8 +88,17 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
   (listing, claim+lease, submit/review), `annotation_service` (versioned save,
   history), `image_store` (content-addressed uploads), `grouping`, `audit`,
   `container` (the `Services` dataclass built by `create_app`).
-- `v2/adapters/` — `openlist.py` (the only OpenList boundary, token-explicit: one
-  client per call) and `inference.py` (`InferenceClient` → the worker's `/infer`).
+- `v2/adapters/` — the swappable edges:
+  * `storage.py`: the `StorageBackend` protocol (paths + 8 IO methods) and
+    `build_storage()`; `local_disk.py` is the self-hosted backend (atomic writes,
+    traversal-proof, `.zlabel/annos` layout), `openlist.py` the external one.
+    Pick with `ZLSERVER_STORAGE_BACKEND`; both are held to
+    `tests/v2/test_storage_contract.py`.
+  * `identity.py`: the `IdentityProvider` protocol + `LocalIdentity` (scrypt
+    hashes in `users`, stdlib only) + `OpenListIdentity` (migration);
+    `ZLSERVER_IDENTITY` picks one, `ZLSERVER_BOOTSTRAP_ADMIN/PASSWORD` creates the
+    first admin once (never resets an existing password).
+  * `inference.py`: `InferenceClient` → the worker's `/infer`.
 - `v2/vendor/openlist_api/` — vendored third-party SDK (do not edit; wrap it).
 - `v2/inference_worker/` — the model's own process: `main.py`
   (`create_worker_app`: `/infer` + `/health` + `/metrics`), `engine.py`

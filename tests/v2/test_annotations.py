@@ -57,8 +57,8 @@ def test_save_creates_version_one_and_claims_the_task(client, auth_headers, ol, 
     assert body["labels"] == ["Root", "Shoot"]
 
     # the document landed in OpenList, current + history
-    assert json.loads(ol.files[f"{ROOT}/projA/zlabel/{anno}.zlabel"])["results"]
-    assert f"{ROOT}/projA/zlabel/_history/{anno}/v1.zlabel" in ol.files
+    assert json.loads(ol.files[f"{ROOT}/projA/.zlabel/annos/{anno}.zlabel"])["results"]
+    assert f"{ROOT}/projA/.zlabel/annos/_history/{anno}/v1.zlabel" in ol.files
 
     with db.session_scope() as session:
         task = session.scalar(select(Task))
@@ -95,7 +95,7 @@ def test_second_save_bumps_the_version(client, auth_headers, ol, db):
             v.version for v in session.scalars(select(AnnotationVersion).order_by(AnnotationVersion.version))
         ]
         assert versions == [1, 2]
-    assert f"{ROOT}/projA/zlabel/_history/{anno}/v2.zlabel" in ol.files
+    assert f"{ROOT}/projA/.zlabel/annos/_history/{anno}/v2.zlabel" in ol.files
 
 
 # endregion
@@ -244,8 +244,8 @@ def test_writes_use_the_service_account_and_reads_the_user_token(client, auth_he
     ol.token_log.clear()
     assert put(client, headers["admin"], anno, document("Root")).status_code == 200
     assert ol.token_log and set(ol.token_log) == {"service-token"}, ol.token_log
-    assert f"{ROOT}/projA/zlabel/{anno}.zlabel" in ol.files
-    assert f"{ROOT}/projA/zlabel/_history/{anno}/v1.zlabel" in ol.files
+    assert f"{ROOT}/projA/.zlabel/annos/{anno}.zlabel" in ol.files
+    assert f"{ROOT}/projA/.zlabel/annos/_history/{anno}/v1.zlabel" in ol.files
 
     # reads stay on the session token
     ol.token_log.clear()

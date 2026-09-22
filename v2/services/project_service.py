@@ -56,11 +56,22 @@ class ProjectService:
 
     # region scanning
     def scan(self) -> ScanOutcome:
-        """Walk OpenList: every top-level dir, marker probe, images inside."""
+        """Walk the storage root: top-level dirs, then the images inside them.
+
+        With the OpenList backend a directory is a project only when it carries the
+        marker file (a shared instance hosts unrelated directories). With the local
+        backend the server owns the tree, so every directory counts.
+        """
         token = self.openlist.service_token()
         present = set(self.openlist.list_dirs(self.openlist.root, token))
         outcome = ScanOutcome(present_dirs=present)
+        marker_discovery = getattr(self.openlist, "uses_marker_discovery", True)
         for name in sorted(present):
+            if not marker_discovery:
+                # the server owns the tree: every top-level directory is a project
+                files = self.openlist.glob_images(self.openlist.project_dir(name), token)
+                outcome.projects.append({"name": name, "files": files})
+                continue
             status = self._marker_status(name, token)
             if status is True:
                 files = self.openlist.glob_images(self.openlist.project_dir(name), token)

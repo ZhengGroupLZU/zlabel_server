@@ -67,6 +67,8 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(256), default="")
     role: Mapped[str] = mapped_column(String(16), default=ROLE_ANNOTATOR)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # scrypt hash for local accounts ("" while OpenList still owns the identity)
+    password_hash: Mapped[str] = mapped_column(String(255), default="")
     finished_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)

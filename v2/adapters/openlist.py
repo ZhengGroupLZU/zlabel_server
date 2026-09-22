@@ -9,12 +9,12 @@ instead of sharing one across requests — the bug v1 had with its global client
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from io import BytesIO
 from typing import Any
 
 import requests
 
+from v2.adapters.storage import RemoteFile, is_image
 from v2.core.config import Settings
 from v2.core.errors import ApiError, Forbidden, NotFound, SessionStale, Unauthorized, UpstreamError
 from v2.core.logging import get_logger
@@ -22,29 +22,19 @@ from v2.vendor.openlist_api import OpenListAPIError, OpenListClient
 
 logger = get_logger("zlabel.v2.openlist")
 
+__all__ = ["IMAGE_EXTENSIONS", "OpenListAdapter", "RemoteFile", "is_image"]
+
 IMAGE_EXTENSIONS: tuple[str, ...] = (".png", ".jpg", ".jpeg")
 
 ClientFactory = Callable[[str], OpenListClient]
 
 
-@dataclass(frozen=True)
-class RemoteFile:
-    """Just enough file metadata for HTTP caching / upload checks."""
-
-    path: str
-    size: int
-    modified: str
-
-    @property
-    def etag(self) -> str:
-        return f'"{self.size}-{self.modified}"'
-
-
-def is_image(path: str) -> bool:
-    return path.lower().endswith(IMAGE_EXTENSIONS)
-
-
 class OpenListAdapter:
+    """``StorageBackend`` backed by an external OpenList service."""
+
+    kind = "openlist"
+    uses_marker_discovery = True  # a directory is a project only with its marker
+
     def __init__(self, settings: Settings, *, client_factory: ClientFactory | None = None) -> None:
         self.settings = settings
         self._client_factory: ClientFactory = client_factory or (lambda host: OpenListClient(host))
@@ -106,7 +96,8 @@ class OpenListAdapter:
         return f"{self.root}/{project.strip('/')}"
 
     def zlabel_dir(self, project: str) -> str:
-        return f"{self.project_dir(project)}/zlabel"
+        """Annotations live in ``<project>/.zlabel/annos`` (the desktop's layout)."""
+        return f"{self.project_dir(project)}/{self.settings.anno_dir_clean}"
 
     def anno_path(self, project: str, anno_id: str) -> str:
         """Where an annotation lives (shared with the desktop client)."""

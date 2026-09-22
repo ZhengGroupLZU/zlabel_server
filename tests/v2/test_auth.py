@@ -78,12 +78,14 @@ def test_second_user_gets_the_annotator_role(client, auth_headers, ol):
 
 def test_bootstrap_admin_is_honoured(settings, db, ol):
     """``ZLSERVER_BOOTSTRAP_ADMIN`` promotes that account even when it is not first."""
+    from v2.adapters.identity import OpenListIdentity
     from v2.adapters.openlist import OpenListAdapter
     from v2.services.auth_service import AuthService
 
     ol.users["root"] = "pw"
     settings.bootstrap_admin = "root"
-    auth = AuthService(db, OpenListAdapter(settings, client_factory=ol.client), settings)
+    identity = OpenListIdentity(OpenListAdapter(settings, client_factory=ol.client))
+    auth = AuthService(db, identity, settings)
     auth.login("rainy", "secret")  # first user takes the automatic admin slot
     _, ctx, _ = auth.login("root", "pw")
     assert ctx.role == ROLE_ADMIN

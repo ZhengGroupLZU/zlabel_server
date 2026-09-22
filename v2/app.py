@@ -46,9 +46,28 @@ def create_app(
             await asyncio.sleep(settings.project_scan_interval)
             await _scan(app)
 
+    def _bootstrap_admin() -> None:
+        """Create the first local admin from the environment (first run only)."""
+        if settings.identity != "local" or not settings.bootstrap_admin:
+            return
+        if not settings.bootstrap_password:
+            logger.warning(
+                f"ZLSERVER_BOOTSTRAP_ADMIN={settings.bootstrap_admin!r} is set but "
+                "ZLSERVER_BOOTSTRAP_PASSWORD is empty: keeping the database as it is"
+            )
+            return
+        try:
+            created = app.state.services.auth.identity.create_user(
+                settings.bootstrap_admin, settings.bootstrap_password, admin=True, only_if_missing=True
+            )
+            logger.info(f"bootstrap admin {created['name']!r} is ready (role={created['role']})")
+        except Exception as e:  # noqa: BLE001 - startup must not die on this
+            logger.error(f"bootstrap admin failed: {e}")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info(f"v{settings.version} starting (db={db.url})")
+        _bootstrap_admin()
         tasks: list[asyncio.Task] = []
         if settings.scan_on_startup:
             tasks.append(asyncio.create_task(_scan(app)))
