@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Response
 
 from v2.api.deps import get_auth, get_services
-from v2.schemas.projects import LabelCreate, LabelOut, LabelPatch
+from v2.schemas.projects import LabelCreate, LabelOrder, LabelOut, LabelPatch
 from v2.services.auth_service import AuthContext
 from v2.services.container import Services
 
@@ -60,6 +60,21 @@ def update_label(
             actor_id=auth.user_id,
         )
     )
+
+
+@router.put("/order", response_model=list[LabelOut])
+def reorder_labels(
+    project: str,
+    payload: LabelOrder,
+    auth: AuthContext = Depends(get_auth),
+    services: Services = Depends(get_services),
+) -> list[LabelOut]:
+    """Set the label order (the ordinal "id" shown in the admin UI)."""
+    services.projects.require_project_reviewer(auth, project)
+    return [
+        LabelOut.of(label)
+        for label in services.projects.reorder_labels(project, payload.order, actor_id=auth.user_id)
+    ]
 
 
 @router.delete("/{label_id}", status_code=204)

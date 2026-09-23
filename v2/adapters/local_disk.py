@@ -9,9 +9,9 @@ directory can be opened by the desktop as a dataset or served by the API):
             project.json                               # optional metadata
             annos/<anno_id>.zlabel                     # annotations
             annos/_history/<anno_id>/v<n>.zlabel       # version history
-        .zlabel-server-project-root                    # optional marker file
 
 No database server, no HTTP hop: listing and scanning are plain filesystem calls.
+Every top-level directory is a project (the server owns the whole tree).
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from v2.adapters.storage import RemoteFile, is_image
+from v2.adapters.storage import FileInfo, is_image
 from v2.core.config import Settings
 from v2.core.errors import NotFound, UpstreamError, ValidationFailed
 from v2.core.logging import get_logger
@@ -33,20 +33,11 @@ class LocalDiskBackend:
     """``StorageBackend`` over ``ZLSERVER_STORAGE_ROOT``."""
 
     kind = "local"
-    uses_marker_discovery = False  # the DB/scan decides what a project is
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.root_dir = Path(settings.storage_root).expanduser()
         self.root_dir.mkdir(parents=True, exist_ok=True)
-
-    # region identity stubs (this backend stores bytes, it does not authenticate)
-    @staticmethod
-    def service_token() -> str:
-        """No credential needed: the server owns the tree."""
-        return ""
-
-    # endregion
 
     # region paths (virtual, POSIX, rooted at "/")
     @property
@@ -68,13 +59,10 @@ class LocalDiskBackend:
     def image_path(self, project: str, rel_path: str) -> str:
         return f"{self.project_dir(project)}/{rel_path.lstrip('/')}"
 
-    def marker_path(self, project: str) -> str:
-        return f"{self.project_dir(project)}/{self.settings.project_marker}"
-
     # endregion
 
     # region io
-    def list_dirs(self, path: str, token: str = "") -> list[str]:
+    def list_dirs(self, path: str) -> list[str]:
         directory = self._resolve(path)
         if not directory.is_dir():
             raise NotFound(f"not found: {path}")
@@ -82,21 +70,27 @@ class LocalDiskBackend:
             entry.name for entry in directory.iterdir() if entry.is_dir() and not entry.name.startswith(".")
         )
 
-    def file_info(self, path: str, token: str = "") -> RemoteFile:
+    def file_info(self, path: str) -> FileInfo:
         target = self._resolve(path)
         if not target.is_file():
             raise NotFound(f"not found: {path}")
         stat = target.stat()
         modified = datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds")
-        return RemoteFile(path=path, size=stat.st_size, modified=modified)
+        return FileInfo(path=path, size=stat.st_size, modified=modified)
 
-    def exists(self, path: str, token: str = "") -> bool:
+    def exists(self, path: str) -> bool:
         try:
             return self._resolve(path).is_file()
         except ValidationFailed:
             return False
 
-    def get_bytes(self, path: str, token: str = "") -> bytes:
+    def is_dir(self, path: str) -> bool:
+        try:
+            return self._resolve(path).is_dir()
+        except ValidationFailed:
+            return False
+
+    def get_bytes(self, path: str) -> bytes:
         target = self._resolve(path)
         if not target.is_file():
             raise NotFound(f"not found: {path}")
@@ -105,7 +99,7 @@ class LocalDiskBackend:
         except OSError as e:  # permissions, vanished mid-read, ...
             raise UpstreamError(f"cannot read {path}: {e}") from e
 
-    def put_bytes(self, path: str, data: bytes, token: str = "") -> None:
+    def put_bytes(self, path: str, data: bytes) -> None:
         """Write atomically: a reader never sees a half-written annotation."""
         target = self._resolve(path)
         try:
@@ -116,7 +110,7 @@ class LocalDiskBackend:
         except OSError as e:
             raise UpstreamError(f"cannot write {path}: {e}") from e
 
-    def glob_files(self, path: str, token: str = "") -> list[str]:
+    def glob_files(self, path: str) -> list[str]:
         directory = self._resolve(path)
         if not directory.is_dir():
             raise NotFound(f"not found: {path}")
@@ -128,10 +122,10 @@ class LocalDiskBackend:
                 found.append(f"{path.rstrip('/')}/{entry.relative_to(directory).as_posix()}")
         return found
 
-    def glob_images(self, path: str, token: str = "") -> list[str]:
-        return [p for p in self.glob_files(path, token) if is_image(p)]
+    def glob_images(self, path: str) -> list[str]:
+        return [p for p in self.glob_files(path) if is_image(p)]
 
-    def ensure_dir(self, path: str, token: str = "") -> None:
+    def ensure_dir(self, path: str) -> None:
         try:
             self._resolve(path).mkdir(parents=True, exist_ok=True)
         except OSError as e:

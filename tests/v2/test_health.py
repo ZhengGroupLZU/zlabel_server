@@ -19,29 +19,33 @@ def test_health_reports_capabilities(client):
 
 
 def test_health_is_cheap_by_default(client):
-    """The shallow probe must not touch OpenList / the inference worker."""
+    """The shallow probe must not touch the disk / the inference worker."""
     body = client.get("/api/v2/health").json()
     assert set(body["checks"]) == {"db"}
 
 
 def test_health_deep_reports_dependencies(client, monkeypatch):
     """Deep probes are aggregated and only a failure marks the app degraded."""
-    monkeypatch.setattr(health_module, "_check_openlist", lambda s: {"status": "ok"})
+    monkeypatch.setattr(health_module, "_check_storage", lambda s: {"status": "ok"})
     monkeypatch.setattr(health_module, "_check_inference", lambda s: {"status": "unavailable"})
     body = client.get("/api/v2/health", params={"deep": "true"}).json()
 
-    assert set(body["checks"]) == {"db", "openlist", "inference"}
-    assert body["checks"]["openlist"]["status"] == "ok"
+    assert set(body["checks"]) == {"db", "storage", "inference"}
+    assert body["checks"]["storage"]["status"] == "ok"
     assert body["checks"]["inference"]["status"] == "unavailable"
     assert body["status"] == "degraded"
 
 
 def test_health_probes_are_unconfigured_without_urls(settings):
-    """Places that never configure OpenList/inference report "unconfigured"."""
+    """An unconfigured inference worker reports "unconfigured"."""
     from v2.api.v2 import health as mod
 
-    plain = type(settings)(database_url="sqlite+pysqlite:///:memory:", oplist_host="", inference_url="")
-    assert mod._check_openlist(plain) == {"status": "unconfigured"}
+    plain = type(settings)(
+        database_url="sqlite+pysqlite:///:memory:",
+        storage_root=settings.storage_root,
+        inference_url="",
+    )
+    assert mod._check_storage(plain)["status"] == "ok"
     assert mod._check_inference(plain) == {"status": "unconfigured"}
 
 

@@ -104,11 +104,11 @@ class _RequestsToTestClient:
 
 
 @pytest.fixture
-def api(client, client_api, monkeypatch, settings):
+def api(client, client_api, monkeypatch):
     """A logged-in desktop client pointed at the test app."""
     shim = _RequestsToTestClient(client)
     monkeypatch.setattr(client_api, "requests", shim)
-    api = client_api.ZLServerApiClient("rainy", "secret", f"http://{settings.oplist_host}")
+    api = client_api.ZLServerApiClient("rainy", "secret", "http://testserver")
     return api
 
 
@@ -137,9 +137,9 @@ def test_login_carries_user_role_and_capabilities(api):
     assert api.headers["Authorization"] == f"Bearer {api.user_token}"
 
 
-def test_scan_projects_tasks_and_versions(api, ol):
+def test_scan_projects_tasks_and_versions(api, harness):
     _login(api)
-    seed(ol, PROJ, files=("images/dish01/D1.png", "images/dish01/D2.png"))
+    seed(harness, PROJ, files=("images/dish01/D1.png", "images/dish01/D2.png"))
     assert api.scan(PROJ) is True  # admin may scan
 
     projects = api.get_projects()
@@ -154,9 +154,9 @@ def test_scan_projects_tasks_and_versions(api, ol):
     assert api.version_of(first["anno_id"]) in (0, None)  # seeded from the listing
 
 
-def test_annotation_roundtrip_and_optimistic_locking(api, ol, client_api, tmp_path):
+def test_annotation_roundtrip_and_optimistic_locking(api, harness, client_api, tmp_path):
     _login(api)
-    seed(ol, PROJ, files=("images/dish01/D1.png",))
+    seed(harness, PROJ, files=("images/dish01/D1.png",))
     api.scan(PROJ)
     item = api.get_tasks(PROJ)["items"][0]
     anno_id = item["anno_id"]
@@ -183,26 +183,26 @@ def test_annotation_roundtrip_and_optimistic_locking(api, ol, client_api, tmp_pa
     assert api.version_of(anno_id) is None  # must reload before retrying
 
     # a reviewer may force it, an annotator may not
-    ol.users["bob"] = "pw-padding"
+    harness.users["bob"] = "pw-padding"
     bob = client_api.ZLServerApiClient("bob", "pw-padding", api.sam_api)
     assert bob.login("bob", "pw-padding"), bob.last_login_error
     assert bob.role == "annotator"
     assert api.save_zlabel(str(document), force=True, project=PROJ).ok
 
 
-def test_annotator_gets_rbac_instead_of_errors(api, ol, client_api):
+def test_annotator_gets_rbac_instead_of_errors(api, harness, client_api):
     """The client must degrade gracefully when the role is not allowed to scan."""
     _login(api)  # the first account of a fresh database becomes admin
-    ol.users["bob"] = "pw-padding"
+    harness.users["bob"] = "pw-padding"
     bob = client_api.ZLServerApiClient("bob", "pw-padding", api.sam_api)
     assert bob.login("bob", "pw-padding"), bob.last_login_error
     assert bob.role == "annotator" and bob.is_reviewer is False
     assert bob.scan(PROJ) is False  # 403 -> no scan, not an exception
 
 
-def test_labels_and_progress(api, ol):
+def test_labels_and_progress(api, harness):
     _login(api)
-    seed(ol, PROJ, files=("a.png",))
+    seed(harness, PROJ, files=("a.png",))
     api.scan(PROJ)
     assert api.get_labels(PROJ) == []
     progress = api.get_progress(PROJ)
@@ -211,10 +211,10 @@ def test_labels_and_progress(api, ol):
     assert api.get_labels("") is None and api.get_progress("") is None
 
 
-def test_get_image_returns_a_pil_image(api, ol):
+def test_get_image_returns_a_pil_image(api, harness):
     _login(api)
-    seed(ol, PROJ, files=())
-    ol.add_file(f"/zlabel_server/projects/{PROJ}/images/dish01/D1.png", _png())
+    seed(harness, PROJ, files=())
+    harness.add_file(f"/zlabel_server/projects/{PROJ}/images/dish01/D1.png", _png())
     api.scan(PROJ)
 
     image = api.get_image("images/dish01/D1.png", project=PROJ)
@@ -222,10 +222,10 @@ def test_get_image_returns_a_pil_image(api, ol):
     assert api.get_image("missing.png", project=PROJ) is None
 
 
-def test_predict_contract(api, ol, services):
+def test_predict_contract(api, harness, services):
     """What the desktop sends must be what the worker receives."""
     _login(api)
-    seed(ol, PROJ, files=("images/dish01/D1.png",))
+    seed(harness, PROJ, files=("images/dish01/D1.png",))
     api.scan(PROJ)
     anno_id = api.get_tasks(PROJ)["items"][0]["anno_id"]
 
@@ -262,13 +262,13 @@ def test_logout_revokes_the_session(api):
     assert api.get_projects() is None  # 401 -> treated as "server refused"
 
 
-def test_frame_calls_do_not_use_the_control_timeout(api, ol, client, client_api, monkeypatch):
+def test_frame_calls_do_not_use_the_control_timeout(api, harness, client, client_api, monkeypatch):
     """Images/predict stay unbounded; control calls keep the 10s timeout."""
     routed = _RequestsToTestClient(client)
     monkeypatch.setattr(client_api, "requests", routed)
     _login(api)
-    seed(ol, PROJ, files=())
-    ol.add_file(f"/zlabel_server/projects/{PROJ}/a.png", _png())
+    seed(harness, PROJ, files=())
+    harness.add_file(f"/zlabel_server/projects/{PROJ}/a.png", _png())
     api.scan(PROJ)
 
     api.get_projects()
@@ -277,9 +277,9 @@ def test_frame_calls_do_not_use_the_control_timeout(api, ol, client, client_api,
     assert routed.timeouts[-1][2] is None
 
 
-def _ready_frame(api, ol, tmp_path) -> tuple[str, str]:
+def _ready_frame(api, harness, tmp_path) -> tuple[str, str]:
     """One project + one frame with a saved annotation; returns (anno_id, document path)."""
-    seed(ol, PROJ, files=("images/dish01/D1.png",))
+    seed(harness, PROJ, files=("images/dish01/D1.png",))
     api.scan(PROJ)
     anno_id = api.get_tasks(PROJ)["items"][0]["anno_id"]
     document = tmp_path / f"{anno_id}.zlabel"
@@ -288,15 +288,15 @@ def _ready_frame(api, ol, tmp_path) -> tuple[str, str]:
     return anno_id, str(document)
 
 
-def test_claim_lease_and_review_roundtrip(api, ol, client_api, tmp_path):
+def test_claim_lease_and_review_roundtrip(api, harness, client_api, tmp_path):
     """The whole workflow the desktop drives: claim -> save -> submit -> review."""
     _login(api)
-    ol.users["bob"] = "pw-padding"
+    harness.users["bob"] = "pw-padding"
     reviewer = client_api.ZLServerApiClient("bob", "pw-padding", api.sam_api)
     assert reviewer.login("bob", "pw-padding"), reviewer.last_login_error
     assert reviewer.role == "annotator"  # only the first account is admin
 
-    anno_id, document = _ready_frame(api, ol, tmp_path)
+    anno_id, document = _ready_frame(api, harness, tmp_path)
 
     # the frame carries the annotator's lease; a second client is refused with detail
     claim = api.claim(anno_id)
@@ -334,10 +334,10 @@ def test_claim_lease_and_review_roundtrip(api, ol, client_api, tmp_path):
     assert task["state"] == "draft" and task["version"] >= 2
 
 
-def test_version_history_contract(api, ol, tmp_path):
+def test_version_history_contract(api, harness, tmp_path):
     """Every save is listed, and an old document can be fetched back."""
     _login(api)
-    anno_id, document = _ready_frame(api, ol, tmp_path)
+    anno_id, document = _ready_frame(api, harness, tmp_path)
     assert api.save_zlabel(document, project=PROJ).ok  # v2
     assert api.save_zlabel(document, project=PROJ).ok  # v3
 
@@ -352,7 +352,7 @@ def test_version_history_contract(api, ol, tmp_path):
     assert api.annotation_version(anno_id, 99, PROJ) is None
 
 
-def test_lease_expiry_and_takeover(client, api, ol, client_api, tmp_path):
+def test_lease_expiry_and_takeover(client, api, harness, client_api, tmp_path):
     """Two desktop clients, one frame: the loser is told, not silently overwritten.
 
     This is the flow the GUI drives: open a frame -> lease -> work; a lease that
@@ -366,11 +366,11 @@ def test_lease_expiry_and_takeover(client, api, ol, client_api, tmp_path):
     from v2.db.models import Task, utcnow
 
     _login(api)
-    ol.users["bob"] = "pw-padding"
+    harness.users["bob"] = "pw-padding"
     second = client_api.ZLServerApiClient("bob", "pw-padding", api.sam_api)
     assert second.login("bob", "pw-padding"), second.last_login_error
 
-    anno_id, document = _ready_frame(api, ol, tmp_path)
+    anno_id, document = _ready_frame(api, harness, tmp_path)
     assert api.claim(anno_id).ok
 
     # the first client's lease lapses (the server TTL is ZLSERVER_LEASE_MINUTES)

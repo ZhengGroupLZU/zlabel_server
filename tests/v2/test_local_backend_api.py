@@ -1,4 +1,4 @@
-"""The whole API on the local disk backend (no OpenList in the storage path)."""
+"""The whole API on the local disk backend (the server owns the tree)."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def seed_image(root: Path, project: str, rel: str) -> Path:
-    """Drop a frame straight into the storage tree (no OpenList involved)."""
+    """Drop a frame straight into the storage tree."""
     path = root / project / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"png-bytes")
@@ -106,16 +106,14 @@ def test_creating_a_project_prepares_the_directory(local_client, local_settings,
 
     project_dir = Path(local_settings.storage_root) / "fresh"
     assert project_dir.is_dir()
-    # the marker file is written too, so an OpenList deployment still recognises it
-    assert (project_dir / local_settings.project_marker).is_file()
 
-    # a project without frames is still listed (no marker-driven discovery)
+    # a project without frames is still listed (every top-level directory counts)
     local_client.post("/api/v2/projects/scan", headers=headers)
     assert "fresh" in {p["name"] for p in local_client.get("/api/v2/projects", headers=headers).json()}
 
 
-def test_zero_openlist_end_to_end(local_client, local_settings, auth_headers):
-    """No OpenList anywhere: local accounts + local storage, full annotate flow."""
+def test_self_hosted_end_to_end(local_client, local_settings, auth_headers):
+    """Self-hosted server: local accounts + local storage, full annotate flow."""
     root = Path(local_settings.storage_root)
     seed_image(root, "projA", "images/dish01/D1.png")
     headers = auth_headers(local_client)

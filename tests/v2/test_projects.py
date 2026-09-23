@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from v2.db.models import Label, Project, Task, User
+from v2.db.models import (
+    Annotation,
+    AnnotationVersion,
+    AuditLog,
+    Label,
+    Project,
+    ProjectMember,
+    Task,
+    User,
+)
 from v2.services.project_service import ProjectService
 
 ROOT = "/zlabel_server/projects"
@@ -12,17 +21,17 @@ SUFFIX = "/.zlabel-server-project-root"
 
 
 def seed(
-    ol,
+    harness,
     name: str = "projA",
     *,
     marker: bool = True,
     files: tuple[str, ...] = (),
 ) -> str:
-    ol.add_dir(f"{ROOT}/{name}")
+    harness.add_dir(f"{ROOT}/{name}")
     if marker:
-        ol.add_file(f"{ROOT}/{name}{SUFFIX}", b"root")
+        harness.add_file(f"{ROOT}/{name}{SUFFIX}", b"root")
     for rel in files:
-        ol.add_file(f"{ROOT}/{name}/{rel}", b"png")
+        harness.add_file(f"{ROOT}/{name}/{rel}", b"png")
     return name
 
 
@@ -33,25 +42,24 @@ def service(services) -> ProjectService:
 # region scanning
 
 
-
-def test_scan_marks_vanished_files_missing(services, ol):
-    seed(ol, "projA", files=("a.png", "b.png"))
+def test_scan_marks_vanished_files_missing(services, harness):
+    seed(harness, "projA", files=("a.png", "b.png"))
     service(services).scan_and_sync(force=True)
-    del ol.files[f"{ROOT}/projA/b.png"]
+    del harness.files[f"{ROOT}/projA/b.png"]
     stats = service(services).scan_and_sync(force=True)
     assert stats["missing"] == 1
 
     with services.db.session_scope() as session:
         assert session.scalar(select(Task).where(Task.rel_path == "b.png")).missing is True
 
-    ol.add_file(f"{ROOT}/projA/b.png", b"png")  # the file comes back
+    harness.add_file(f"{ROOT}/projA/b.png", b"png")  # the file comes back
     service(services).scan_and_sync(force=True)
     with services.db.session_scope() as session:
         assert session.scalar(select(Task).where(Task.rel_path == "b.png")).missing is False
 
 
-def test_scan_is_throttled_unless_forced(services, ol):
-    seed(ol, "projA", files=("a.png",))
+def test_scan_is_throttled_unless_forced(services, harness):
+    seed(harness, "projA", files=("a.png",))
     first = service(services).scan_and_sync(force=True)
     second = service(services).scan_and_sync()  # inside the throttle window
     assert first["skipped"] == 0 and second["skipped"] == 1
@@ -61,8 +69,8 @@ def test_scan_is_throttled_unless_forced(services, ol):
 
 
 # region api
-def test_projects_endpoint_lists_progress(client, auth_headers, ol):
-    seed(ol, "projA", files=("a.png", "b.png"))
+def test_projects_endpoint_lists_progress(client, auth_headers, harness):
+    seed(harness, "projA", files=("a.png", "b.png"))
     headers = auth_headers(client)
     assert client.post("/api/v2/projects/scan", headers=headers).status_code == 200
 
@@ -72,10 +80,10 @@ def test_projects_endpoint_lists_progress(client, auth_headers, ol):
     assert projects[0]["progress"]["draft"] == 2
 
 
-def test_project_writes_need_a_reviewer(client, auth_headers, ol):
-    seed(ol, "projA", files=("a.png",))
+def test_project_writes_need_a_reviewer(client, auth_headers, harness):
+    seed(harness, "projA", files=("a.png",))
     admin = auth_headers(client, "rainy")
-    ol.users["bob"] = "pw"
+    harness.users["bob"] = "pw"
     bob = auth_headers(client, "bob", "pw")
     client.post("/api/v2/projects/scan", headers=admin)
 
@@ -84,8 +92,8 @@ def test_project_writes_need_a_reviewer(client, auth_headers, ol):
     assert client.get("/api/v2/projects/projA", headers=bob).json()["description"] == "x"
 
 
-def test_progress_reflects_task_states(client, auth_headers, ol, db):
-    seed(ol, "projA", files=("a.png", "b.png", "c.png"))
+def test_progress_reflects_task_states(client, auth_headers, harness, db):
+    seed(harness, "projA", files=("a.png", "b.png", "c.png"))
     headers = auth_headers(client)
     client.post("/api/v2/projects/scan", headers=headers)
 
@@ -106,8 +114,8 @@ def test_progress_reflects_task_states(client, auth_headers, ol, db):
     assert progress["finished"] == 1
 
 
-def test_progress_by_user(client, auth_headers, ol, db):
-    seed(ol, "projA", files=("a.png",))
+def test_progress_by_user(client, auth_headers, harness, db):
+    seed(harness, "projA", files=("a.png",))
     headers = auth_headers(client)
     client.post("/api/v2/projects/scan", headers=headers)
     with db.session_scope() as session:
@@ -130,10 +138,10 @@ def test_unknown_project_is_404(client, auth_headers):
 
 
 # region labels
-def test_label_crud_and_roles(client, auth_headers, ol):
-    seed(ol, "projA", files=("a.png",))
+def test_label_crud_and_roles(client, auth_headers, harness):
+    seed(harness, "projA", files=("a.png",))
     admin = auth_headers(client, "rainy")
-    ol.users["bob"] = "pw"
+    harness.users["bob"] = "pw"
     bob = auth_headers(client, "bob", "pw")
     client.post("/api/v2/projects/scan", headers=admin)
 
@@ -173,8 +181,79 @@ def test_label_crud_and_roles(client, auth_headers, ol):
         assert session.scalar(select(Label)) is None
 
 
-def test_ensure_labels_creates_missing_ones(services, ol):
-    seed(ol, "projA", files=("a.png",))
+def test_delete_project_removes_rows_and_files(client, auth_headers, harness, db):
+    seed(harness, "projA", files=("images/D1.png",))
+    headers = auth_headers(client)
+    client.post("/api/v2/projects/scan", headers=headers)
+    anno_id = client.get("/api/v2/projects/projA/tasks", headers=headers).json()["items"][0]["anno_id"]
+    saved = client.put(
+        f"/api/v2/projects/projA/annotations/{anno_id}",
+        json={"results": {"r1": {"labels": [{"name": "Root"}]}}},
+        headers=headers,
+    )
+    assert saved.status_code == 200, saved.text
+    assert (
+        client.post("/api/v2/projects/projA/labels", json={"name": "Extra"}, headers=headers).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/api/v2/projects/projA/members", json={"user_id": 1, "role": "reviewer"}, headers=headers
+        ).status_code
+        == 201
+    )
+
+    resp = client.delete("/api/v2/projects/projA", headers=headers)
+    assert resp.status_code == 204, resp.text
+
+    assert not harness.disk_path(f"{ROOT}/projA").exists()
+    with db.session_scope() as session:
+        for model in (Project, Task, Annotation, AnnotationVersion, Label, ProjectMember):
+            assert session.scalar(select(model)) is None, model.__name__
+        actions = [row.action for row in session.scalars(select(AuditLog)).all()]
+    assert "delete_project" in actions
+
+
+def test_delete_project_can_keep_the_files(client, auth_headers, harness, db):
+    seed(harness, "projA", files=("images/D1.png",))
+    headers = auth_headers(client)
+    client.post("/api/v2/projects/scan", headers=headers)
+
+    resp = client.delete("/api/v2/projects/projA", params={"delete_files": "false"}, headers=headers)
+    assert resp.status_code == 204
+
+    assert harness.disk_path(f"{ROOT}/projA").is_dir()
+    with db.session_scope() as session:
+        assert session.scalar(select(Project)) is None
+    # ... and a rescan adopts the directory again
+    client.post("/api/v2/projects/scan", headers=headers)
+    assert [p["name"] for p in client.get("/api/v2/projects", headers=headers).json()] == ["projA"]
+
+
+def test_delete_project_is_admin_only(client, auth_headers, harness):
+    seed(harness, "projA", files=("images/D1.png",))
+    headers = auth_headers(client)
+    client.post("/api/v2/projects/scan", headers=headers)
+    assert (
+        client.post(
+            "/api/v2/admin/users",
+            json={"name": "reviewer1", "password": "secret123", "role": "reviewer"},
+            headers=headers,
+        ).status_code
+        == 201
+    )
+    reviewer = auth_headers(client, "reviewer1", "secret123")
+    assert client.delete("/api/v2/projects/projA", headers=reviewer).status_code == 403
+    assert client.delete("/api/v2/projects/projA", headers=headers).status_code == 204
+
+
+def test_delete_unknown_project_is_404(client, auth_headers):
+    headers = auth_headers(client)
+    assert client.delete("/api/v2/projects/nope", headers=headers).status_code == 404
+
+
+def test_ensure_labels_creates_missing_ones(services, harness):
+    seed(harness, "projA", files=("a.png",))
     service(services).scan_and_sync(force=True)
     with services.db.session_scope() as session:
         project_id = session.scalar(select(Project.id))

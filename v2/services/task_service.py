@@ -73,6 +73,7 @@ class TaskService:
         claim: str | None = None,
         user_id: int | None = None,
         group: str | None = None,
+        search: str | None = None,
         limit: int = 50,
         offset: int = 0,
         order: str = "sequence",
@@ -91,6 +92,8 @@ class TaskService:
                 query = query.where(Task.state.in_(states))
             if group is not None:
                 query = query.where(Task.group_name == group)
+            if search:
+                query = query.where(Task.rel_path.ilike(f"%{search}%"))
             query = self._apply_claim_filter(query, claim, user_id)
             total = int(session.scalar(select(func.count()).select_from(query.subquery())) or 0)
             rows = session.scalars(self._order(query, order).limit(limit).offset(offset)).all()

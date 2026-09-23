@@ -1,6 +1,8 @@
-"""Project / label / progress models."""
+"""Project / label / instance / progress models."""
 
 from __future__ import annotations
+
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -25,6 +27,8 @@ class ProjectOut(BaseModel):
     display_name: str = ""
     description: str = ""
     active: bool = True
+    #: the frames form sequences (``group``/``day`` are parsed from the path)
+    timeline: bool = True
     progress: ProgressOut | None = None
 
     @classmethod
@@ -35,6 +39,7 @@ class ProjectOut(BaseModel):
             display_name=project.display_name or project.name,
             description=project.description or "",
             active=bool(project.active),
+            timeline=bool(getattr(project, "timeline", True)),
             progress=ProgressOut.of(progress) if progress else None,
         )
 
@@ -42,12 +47,15 @@ class ProjectOut(BaseModel):
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     display_name: str = ""
+    #: off = the frames do not form sequences (no ``group``/``day`` parsing)
+    timeline: bool = True
 
 
 class ProjectPatch(BaseModel):
     display_name: str | None = None
     description: str | None = None
     active: bool | None = None
+    timeline: bool | None = None
 
 
 class ScanStats(BaseModel):
@@ -74,8 +82,58 @@ class LabelOut(BaseModel):
 
 class LabelCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
+    #: empty = the server picks an unused colour from the label palette
+    color: str = ""
+    #: ``None`` = append at the end (the displayed ordinal id is the position)
+    sort: int | None = None
+
+
+class LabelOrder(BaseModel):
+    """Every label of the project, in the wanted order (0 = first)."""
+
+    order: list[int]
+
+
+class InstanceOut(BaseModel):
+    """One project-scoped instance (the documents' ``instance_id``)."""
+
+    number: int
+    name: str = ""
+    note: str = ""
+    status: str = ""
     color: str = "#000000"
-    sort: int = 0
+    archived: bool = False
+    results: int = 0
+    frames: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class InstanceCreate(BaseModel):
+    #: ``None`` = the next free number
+    number: int | None = None
+    name: str = Field(default="", max_length=120)
+    note: str = ""
+    status: str = Field(default="", max_length=60)
+    color: str = ""
+
+
+class InstancePatch(BaseModel):
+    name: str | None = None
+    note: str | None = None
+    status: str | None = None
+    color: str | None = None
+    archived: bool | None = None
+
+
+class InstanceResultOut(BaseModel):
+    """One annotation (a result inside a document) belonging to an instance."""
+
+    task_id: int
+    anno_id: str
+    rel_path: str
+    result_id: str
+    label: str = ""
 
 
 class LabelPatch(BaseModel):

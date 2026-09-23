@@ -1,8 +1,7 @@
 """``/api/v2/projects/{project}/images/{rel_path}`` — frames, with HTTP caching.
 
 Reading a frame is side-effect free (v1 used it to warm the model, which is how
-predictions ended up running on the wrong embedding). Images are fetched with the
-*session user's* OpenList token, so per-user ACLs still apply.
+predictions ended up running on the wrong embedding).
 """
 
 from __future__ import annotations
@@ -33,17 +32,17 @@ def get_image(
     project: str,
     rel_path: str,
     if_none_match: str | None = Header(None),
-    auth: AuthContext = Depends(get_auth),
+    _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> Response:
     """``ETag`` + ``If-None-Match`` friendly; 404 when the frame is gone."""
     services.projects.get_project(project)
-    path = services.openlist.image_path(project, rel_path)
-    info = services.openlist.file_info(path, auth.oplist_token)
+    path = services.storage.image_path(project, rel_path)
+    info = services.storage.file_info(path)
     headers = {"ETag": info.etag, "Cache-Control": "private, max-age=0, must-revalidate"}
     if if_none_match and if_none_match.strip() == info.etag:
         return Response(status_code=304, headers=headers)
-    content = services.openlist.get_bytes(path, auth.oplist_token)
+    content = services.storage.get_bytes(path)
     headers["X-Image-Sha256"] = sha256_bytes(content)
     return Response(content=content, media_type=_media_type(rel_path), headers=headers)
 

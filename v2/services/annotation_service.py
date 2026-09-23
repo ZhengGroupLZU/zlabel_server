@@ -1,8 +1,8 @@
 """Reading and writing annotation documents.
 
-The document itself stays a plain JSON file in OpenList (``<project>/zlabel/
-<anno_id>.zlabel``) so mirrors and other tooling keep working; the DB holds the
-metadata that makes concurrent editing safe:
+The document itself stays a plain JSON file in the storage tree
+(``<project>/.zlabel/annos/<anno_id>.zlabel``) so mirrors and other tooling keep
+working; the DB holds the metadata that makes concurrent editing safe:
 
 - ``version`` + ``base_version`` gives optimistic locking (a save based on an old
   version is refused with 409 and the current author/version),
@@ -22,9 +22,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session as OrmSession
 
-from v2.adapters.openlist import OpenListAdapter
+from v2.adapters.storage import StorageBackend
 from v2.core.config import Settings
-from v2.core.errors import Conflict, NotFound
+from v2.core.errors import Conflict, NotFound, ValidationFailed
 from v2.core.logging import get_logger
 from v2.db.base import Database
 from v2.db.models import (
@@ -32,14 +32,17 @@ from v2.db.models import (
     STATE_DRAFT,
     STATE_REJECTED,
     STATE_SUBMITTED,
+    STATES,
     Annotation,
     AnnotationVersion,
+    Project,
     Task,
     User,
     utcnow,
 )
 from v2.services import audit
 from v2.services.auth_service import AuthContext
+from v2.services.instance_service import InstanceService
 from v2.services.project_service import ProjectService
 from v2.services.task_service import TaskService
 
@@ -82,26 +85,23 @@ class AnnotationService:
     def __init__(
         self,
         db: Database,
-        openlist: OpenListAdapter,
+        storage: StorageBackend,
         projects: ProjectService,
         tasks: TaskService,
+        instances: InstanceService,
         settings: Settings,
     ) -> None:
         self.db = db
-        self.openlist = openlist
+        self.storage = storage
         self.projects = projects
         self.tasks = tasks
+        self.instances = instances
         self.settings = settings
 
     # region reads
-    def get(self, project: str, anno_id: str, token: str) -> tuple[bytes, int]:
-        """Current document + version; 404 when this frame is not annotated yet.
-
-        ``token`` is the *session user's* OpenList token: reads honour the user's
-        own ACLs (a user must not see annotations of directories they cannot read).
-        Writes, by contrast, go through the service account (``_write_token``).
-        """
-        content = self.openlist.get_bytes(self.openlist.anno_path(project, anno_id), token)
+    def get(self, project: str, anno_id: str) -> tuple[bytes, int]:
+        """Current document + version; 404 when this frame is not annotated yet."""
+        content = self.storage.get_bytes(self.storage.anno_path(project, anno_id))
         with self.db.session_scope() as session:
             row = session.scalar(select(Annotation).where(Annotation.anno_id == anno_id))
         return content, int(row.version) if row is not None else 0
@@ -129,13 +129,13 @@ class AnnotationService:
                 for row in rows
             ]
 
-    def get_version(self, project: str, anno_id: str, version: int, token: str) -> bytes:
+    def get_version(self, project: str, anno_id: str, version: int) -> bytes:
         """Historical document, or the current one when the versions match."""
-        current_bytes, current_version = self.get(project, anno_id, token)
+        current_bytes, current_version = self.get(project, anno_id)
         if version <= 0 or version == current_version:
             return current_bytes
-        path = self.openlist.history_path(project, anno_id, version)
-        return self.openlist.get_bytes(path, token)
+        path = self.storage.history_path(project, anno_id, version)
+        return self.storage.get_bytes(path)
 
     def meta(self, anno_id: str) -> tuple[int, str]:
         """``(version, state)`` for a task; ``(0, state)`` when never saved."""
@@ -166,9 +166,6 @@ class AnnotationService:
         payload = json.dumps(document, ensure_ascii=False).encode("utf-8")
         content_hash = hashlib.sha256(payload).hexdigest()
         labels = extract_label_names(document)
-        # writes use the server's storage identity (ZLSERVER_OPLIST_TOKEN or the
-        # service credentials): annotators usually have read-only OpenList access
-        token = self.openlist.service_token()
 
         with self.db.session_scope() as session:
             task = session.scalar(select(Task).where(Task.anno_id == anno_id))
@@ -196,8 +193,10 @@ class AnnotationService:
                 )
 
             new_version = current_version + 1
-            self._write_files(project, anno_id, payload, new_version, token)
+            self._write_files(project, anno_id, payload, new_version)
             task.labels = self.projects.ensure_labels(session, task.project_id, labels)
+            # keep the instance registry / links in step with the document
+            self.instances.sync_document(session, project_id=task.project_id, task=task, document=document)
             if task.state == STATE_REJECTED and not force:
                 task.state = STATE_DRAFT  # the annotator is reworking a rejected frame
             self.tasks.renew_lease(session, task, auth.user_id)
@@ -208,7 +207,7 @@ class AnnotationService:
                 session.add(current)
             current.version = new_version
             current.author_id = auth.user_id
-            current.path = self.openlist.anno_path(project, anno_id)
+            current.path = self.storage.anno_path(project, anno_id)
             current.labels_json = json.dumps(labels, ensure_ascii=False)
             current.content_hash = content_hash
             current.updated_at = utcnow()
@@ -217,7 +216,7 @@ class AnnotationService:
                     task_id=task.id,
                     version=new_version,
                     author_id=auth.user_id,
-                    path=self.openlist.history_path(project, anno_id, new_version),
+                    path=self.storage.history_path(project, anno_id, new_version),
                     labels_json=json.dumps(labels, ensure_ascii=False),
                     content_hash=content_hash,
                     note=note,
@@ -238,12 +237,162 @@ class AnnotationService:
             version=new_version, state=state, updated_at=updated_at, content_hash=content_hash, labels=labels
         )
 
-    def _write_files(self, project: str, anno_id: str, payload: bytes, version: int, token: str) -> None:
+    def import_document(
+        self,
+        project: str,
+        rel_path: str,
+        content: bytes,
+        *,
+        document: dict[str, Any],
+        state: str | None = None,
+        actor_id: int | None = None,
+        note: str = "imported",
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Import a document into a task: normalise it, write it, register it.
+
+        The file *name* is the anno id, so the document's embedded ``"id"`` must
+        match it: a legacy document is copied with its old ``id`` replaced by the
+        task's (everything else is kept verbatim, including unknown fields). The
+        current document and its history copy are written, then the DB is brought
+        in step: annotation row (a fresh version when the content is new, no-op
+        when it was imported already), label registry and instance mirror.
+        ``state`` can mark the frame as already reviewed (``approved``) for legacy
+        datasets that were finished before the server existed.
+        """
+        with self.db.session_scope() as session:
+            task = session.scalar(
+                select(Task).join(Project).where(Project.name == project, Task.rel_path == rel_path)
+            )
+            if task is None:
+                raise NotFound(f"no task for {rel_path!r} in {project!r} - scan the project first")
+            normalized = document
+            if str(document.get("id") or "") != task.anno_id:
+                # the id is the identity of the file: rewrite it, keep everything else
+                normalized = dict(document)
+                normalized["id"] = task.anno_id
+                content = json.dumps(normalized, ensure_ascii=False, indent=4).encode("utf-8")
+            labels = extract_label_names(normalized)
+            content_hash = hashlib.sha256(content).hexdigest()
+            current = session.scalar(select(Annotation).where(Annotation.task_id == task.id))
+            if current is not None and (current.content_hash or "") == content_hash:
+                return {
+                    "anno_id": task.anno_id,
+                    "version": int(current.version),
+                    "labels": json.loads(current.labels_json or "[]"),
+                    "imported": False,
+                }
+            if current is not None and self._same_document_except_id(
+                self.storage.anno_path(project, task.anno_id), normalized
+            ):
+                # the import ran before the id rewrite existed (or files were copied
+                # by hand): the annotation itself is identical, so repair the files
+                # and hashes in place instead of creating a new version
+                path = self.storage.anno_path(project, task.anno_id)
+                history = self.storage.history_path(project, task.anno_id, int(current.version))
+                if not dry_run:
+                    self.storage.put_bytes(path, content)
+                    self.storage.put_bytes(history, content)
+                    current.content_hash = content_hash
+                    current.updated_at = utcnow()
+                    version_row = session.scalar(
+                        select(AnnotationVersion).where(
+                            AnnotationVersion.task_id == task.id,
+                            AnnotationVersion.version == int(current.version),
+                        )
+                    )
+                    if version_row is not None:
+                        version_row.content_hash = content_hash
+                    audit.record(
+                        session,
+                        action="repair_annotation_id",
+                        user_id=actor_id,
+                        target_type="task",
+                        target_id=task.anno_id,
+                        detail={"version": int(current.version), "rel_path": rel_path},
+                    )
+                logger.info(f"repaired the embedded id of {rel_path!r} (version {current.version})")
+                return {
+                    "anno_id": task.anno_id,
+                    "version": int(current.version),
+                    "labels": labels,
+                    "imported": False,
+                    "repaired": True,
+                }
+
+            version = int(current.version) + 1 if current is not None else 1
+            if dry_run:
+                return {
+                    "anno_id": task.anno_id,
+                    "version": version,
+                    "labels": labels,
+                    "imported": True,
+                }
+            path = self.storage.anno_path(project, task.anno_id)
+            history = self.storage.history_path(project, task.anno_id, version)
+            history_dir = history.rsplit("/", 1)[0]
+            self.storage.ensure_dir(history_dir)
+            self.storage.put_bytes(path, content)
+            self.storage.put_bytes(history, content)
+
+            task.labels = self.projects.ensure_labels(session, task.project_id, labels)
+            self.instances.sync_document(session, project_id=task.project_id, task=task, document=normalized)
+            if current is None:
+                current = Annotation(task_id=task.id, anno_id=task.anno_id)
+                session.add(current)
+            current.version = version
+            current.author_id = actor_id
+            current.path = path
+            current.labels_json = json.dumps(labels, ensure_ascii=False)
+            current.content_hash = content_hash
+            current.updated_at = utcnow()
+            session.add(
+                AnnotationVersion(
+                    task_id=task.id,
+                    version=version,
+                    author_id=actor_id,
+                    path=history,
+                    labels_json=json.dumps(labels, ensure_ascii=False),
+                    content_hash=content_hash,
+                    note=note,
+                )
+            )
+            if state:
+                if state not in STATES:
+                    raise ValidationFailed(f"unknown state: {state}")
+                task.state = state
+                if state == STATE_APPROVED:
+                    task.reviewed_at = utcnow()
+            task.updated_at = utcnow()
+            audit.record(
+                session,
+                action="import_annotation",
+                user_id=actor_id,
+                target_type="task",
+                target_id=task.anno_id,
+                detail={"version": version, "labels": labels, "rel_path": rel_path},
+            )
+        logger.info(f"imported annotation {rel_path!r} (version {version}, labels={labels})")
+        return {"anno_id": task.anno_id, "version": version, "labels": labels, "imported": True}
+
+    def _same_document_except_id(self, path: str, document: dict[str, Any]) -> bool:
+        """True when the stored document matches ``document`` but for the ``id``."""
+        try:
+            stored = json.loads(self.storage.get_bytes(path).decode("utf-8"))
+        except Exception:  # noqa: BLE001 - missing/unreadable: not the same document
+            return False
+        if not isinstance(stored, dict):
+            return False
+        return {k: v for k, v in stored.items() if k != "id"} == {
+            k: v for k, v in document.items() if k != "id"
+        }
+
+    def _write_files(self, project: str, anno_id: str, payload: bytes, version: int) -> None:
         """History copy first, then the live document (a failure keeps the DB clean)."""
-        history = self.openlist.history_path(project, anno_id, version)
-        self.openlist.ensure_dir(history.rsplit("/", 1)[0], token)
-        self.openlist.put_bytes(history, payload, token)
-        self.openlist.put_bytes(self.openlist.anno_path(project, anno_id), payload, token)
+        history = self.storage.history_path(project, anno_id, version)
+        self.storage.ensure_dir(history.rsplit("/", 1)[0])
+        self.storage.put_bytes(history, payload)
+        self.storage.put_bytes(self.storage.anno_path(project, anno_id), payload)
 
     @staticmethod
     def _conflict_detail(session: OrmSession, row: Annotation | None) -> dict[str, Any]:

@@ -25,14 +25,8 @@ class Settings(BaseSettings):
     # --- storage -----------------------------------------------------------
     database_url: str = "./data/zlabel_server_v2.db"
     upload_dir: str = "./data/uploads"
-    # where the datasets live: "openlist" (proxy an external service) or "local"
-    # (the server owns a directory tree, no external dependency)
-    storage_backend: Literal["openlist", "local"] = "openlist"
-    # root of that tree for the local backend (mount/NAS paths are fine)
+    # the server owns its datasets as a plain directory tree (mount/NAS paths are fine)
     storage_root: str = "./data/storage"
-    # who the accounts belong to: "openlist" (the external service) or "local"
-    # (our own users table, scrypt hashes). local identity needs local storage.
-    identity: Literal["openlist", "local"] = "openlist"
     # optional: create this admin account at startup when it does not exist yet
     bootstrap_password: str = ""
     # --- web administration UI ---------------------------------------------
@@ -44,11 +38,10 @@ class Settings(BaseSettings):
     # project access: "open" = any account may work on any project (pre-P4
     # behaviour), "strict" = only `project_members` (global admins always see all)
     project_access_mode: Literal["open", "strict"] = "open"
-    # Where annotations live inside a project directory. Empty = pick by backend:
-    # the local backend uses ".zlabel/annos" (same layout as the desktop's dataset
-    # mode), the OpenList backend keeps the historical "zlabel" so an existing
-    # deployment does not lose sight of its annotations. Set it explicitly to
-    # switch (after `python -m v2.cli migrate-layout`).
+    # Where annotations live inside a project directory. Empty = ".zlabel/annos"
+    # (the same layout as the desktop's dataset mode, so one directory can be used
+    # by both sides). Old deployments moving off the historical `<project>/zlabel`
+    # layout run `python -m v2.cli migrate-layout` and set this explicitly.
     anno_dir: str = ""
 
     # --- auth / sessions ---------------------------------------------------
@@ -61,20 +54,15 @@ class Settings(BaseSettings):
     lease_minutes: int = 30
 
     # --- labels ------------------------------------------------------------
-    # colour used when an annotation introduces a label the server does not know yet
-    default_label_color: str = "#000000"
+    # colour used when an annotation introduces a label the server does not know
+    # yet. Empty = pick from the built-in qualitative palette (see
+    # `v2/services/label_palette.py`); set a colour to force one for every label.
+    default_label_color: str = ""
 
-    # --- OpenList ----------------------------------------------------------
-    oplist_host: str = "http://127.0.0.1:5244"
-    oplist_username: str = ""
-    oplist_password: str = ""
-    oplist_token: str = ""  # static service token used by the background scanner
-    oplist_proj_dir: str = "/zlabel_server/projects"
-    oplist_proj_name: str = ""
-    project_marker: str = ".zlabel-server-project-root"
-    # scan OpenList into the task table once at startup / every N seconds (<=0 = off)
-    scan_on_startup: bool = True
-    project_scan_interval: int = 300
+    # --- project discovery ------------------------------------------------
+    # Scanning is **manual only**: the admin Projects/Dashboard pages and
+    # `POST /projects/scan` trigger it. There is no startup or periodic scan
+    # (walking the storage tree is the slowest operation in the system).
 
     # --- inference service (separate process) ------------------------------
     inference_url: str = "http://127.0.0.1:8001"
@@ -98,19 +86,13 @@ class Settings(BaseSettings):
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
 
-    #: layout the local backend defaults to (identical to the desktop datasets)
-    DEFAULT_LOCAL_ANNO_DIR: ClassVar[str] = ".zlabel/annos"
-    #: layout OpenList deployments have been using since v1
-    LEGACY_ANNO_DIR: ClassVar[str] = "zlabel"
+    #: layout the storage tree defaults to (identical to the desktop datasets)
+    DEFAULT_ANNO_DIR: ClassVar[str] = ".zlabel/annos"
 
     @property
     def anno_dir_clean(self) -> str:
         """The annotation directory as a safe relative POSIX path."""
-        configured = str(self.anno_dir or "")
-        if not configured:
-            configured = (
-                self.DEFAULT_LOCAL_ANNO_DIR if self.storage_backend == "local" else self.LEGACY_ANNO_DIR
-            )
+        configured = str(self.anno_dir or "") or self.DEFAULT_ANNO_DIR
         parts = [p for p in configured.replace("\\", "/").split("/") if p not in ("", ".")]
         if not parts or any(p == ".." for p in parts):
             raise ValueError(f"ZLSERVER_ANNO_DIR is not a safe relative path: {self.anno_dir!r}")
@@ -118,14 +100,13 @@ class Settings(BaseSettings):
 
     def ensure_dirs(self) -> None:
         """Create the parent directory of the sqlite file, the upload dir and the
-        local storage root."""
+        storage root."""
         if self.is_sqlite and ":memory:" not in self.database_url:
             Path(self.database_url.removeprefix("sqlite+pysqlite:///")).parent.mkdir(
                 parents=True, exist_ok=True
             )
         Path(self.upload_dir).mkdir(parents=True, exist_ok=True)
-        if self.storage_backend == "local":
-            Path(self.storage_root).expanduser().mkdir(parents=True, exist_ok=True)
+        Path(self.storage_root).expanduser().mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

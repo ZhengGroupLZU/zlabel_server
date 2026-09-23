@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import sys
 from ipaddress import ip_address  # noqa: F401  (kept for future bind checks)
 from pathlib import Path
@@ -167,11 +168,158 @@ def cmd_project_members(args) -> int:
 
 
 # region storage
+def cmd_sync_instances(args) -> int:
+    """Backfill the instance registry from the stored annotation documents.
+
+    Instances are mirrored on every save; this rebuilds the rows for datasets
+    annotated before the instance tables existed (or after a repair).
+    """
+    settings, database, _, storage = _services(args)
+    from v2.services.instance_service import InstanceService
+    from v2.services.project_service import ProjectService
+
+    projects = ProjectService(database, storage, settings)
+    service = InstanceService(database, storage, projects, settings)
+    if args.project:
+        names = [args.project]
+    else:
+        names = [project.name for project in projects.list_projects(active_only=False)]
+    total = {"documents": 0, "instances": 0, "results": 0}
+    for name in names:
+        try:
+            stats = service.sync_project(name)
+        except Exception as e:  # noqa: BLE001 - report and keep going with the rest
+            print(f"{name}: error: {e}", file=sys.stderr)
+            continue
+        for key, value in stats.items():
+            total[key] += value
+        print(
+            f"{name}: {stats['documents']} document(s), {stats['instances']} new instance(s), "
+            f"{stats['results']} annotation link(s)"
+        )
+    print(f"total: {total['documents']} document(s), {total['instances']} instance(s) created")
+    return 0
+
+
+def cmd_import_annotations(args) -> int:
+    """Import a folder of legacy ``<anno_id>.zlabel`` files into a server project.
+
+    The documents are copied **byte-for-byte** under their new anno id
+    (``sha256("<project key>/<rel>")``, derived from each document's
+    ``image_path``), and the DB is brought in step: annotation row (+ history
+    copy), label registry and instance mirror. The project must be scanned first
+    (the frames are what create the tasks).
+    """
+    settings, database, _, storage = _services(args)
+    from v2.contracts.ids import anno_id_for
+    from v2.services.container import Services
+
+    services = Services.build(settings, database, storage=storage)
+    project = services.projects.get_project(args.project, active_only=False)
+    source = Path(args.source).expanduser()
+    if not source.is_dir():
+        print(f"not a directory: {source}", file=sys.stderr)
+        return 2
+    files = sorted(source.glob("*.zlabel"))
+    if not files:
+        print(f"no *.zlabel files in {source}", file=sys.stderr)
+        return 2
+
+    stats = {"imported": 0, "already": 0, "repaired": 0, "conflict": 0, "no_image": 0, "unreadable": 0}
+    for path in files:
+        try:
+            content = path.read_bytes()
+            document = json.loads(content.decode("utf-8"))
+        except Exception as e:  # noqa: BLE001 - one bad file must not stop the run
+            stats["unreadable"] += 1
+            print(f"  {path.name}: unreadable ({e})", file=sys.stderr)
+            continue
+        rel = str((document or {}).get("image_path") or "").strip()
+        if not rel:
+            stats["unreadable"] += 1
+            print(f"  {path.name}: no image_path", file=sys.stderr)
+            continue
+        if not storage.exists(storage.image_path(project.name, rel)):
+            stats["no_image"] += 1
+            print(f"  {path.name}: no frame for {rel!r} (scan the project first)", file=sys.stderr)
+            continue
+        target = storage.anno_path(project.name, anno_id_for(project.key, rel))
+        if storage.exists(target) and not args.overwrite and storage.get_bytes(target) != content:
+            stats["conflict"] += 1
+            print(f"  {rel}: target exists with different content (use --overwrite)", file=sys.stderr)
+            continue
+        try:
+            # the service normalises the embedded "id" to the task's and writes
+            # the document + its history copy itself
+            outcome = services.annotations.import_document(
+                project.name,
+                rel,
+                content,
+                document=document,
+                state=args.state or None,
+                dry_run=args.dry_run,
+            )
+        except Exception as e:  # noqa: BLE001 - report and keep going
+            stats["unreadable"] += 1
+            print(f"  {rel}: {e}", file=sys.stderr)
+            continue
+        if outcome["imported"]:
+            stats["imported"] += 1
+        elif outcome.get("repaired"):
+            stats["repaired"] += 1
+        else:
+            stats["already"] += 1
+
+    verb = "would import" if args.dry_run else "imported"
+    print(
+        f"{verb} {stats['imported']} document(s); {stats['repaired']} id-repair(s); "
+        f"{stats['already']} already present; {stats['conflict']} conflict(s); "
+        f"{stats['no_image']} without a frame; {stats['unreadable']} unreadable"
+    )
+    if args.dry_run:
+        print("dry run: nothing was written")
+    else:
+        print(f"project {project.name!r}: {len(files)} source file(s) processed")
+    return 0
+
+
+def cmd_migrate_anno_ids(args) -> int:
+    """Re-key annotation files from the legacy ``md5(name/rel)`` ids to sha256 ids.
+
+    Runs against ``ZLSERVER_STORAGE_ROOT`` + ``ZLSERVER_DATABASE_URL`` (the same
+    settings as the API). Each project's stable key comes from
+    ``<project>/.zlabel/project.json`` (created when missing); the files and the
+    rows that referenced the old ids are updated together.
+    """
+    settings, database, _, storage = _services(args)
+    from v2.services.project_service import ProjectService
+
+    service = ProjectService(database, storage, settings)
+    if args.project:
+        names = [args.project]
+    else:
+        names = [project.name for project in service.list_projects(active_only=False)]
+    total = {"renamed": 0, "tasks": 0, "versions": 0, "skipped": 0}
+    for name in names:
+        try:
+            stats = service.migrate_anno_ids(name, dry_run=args.dry_run)
+        except Exception as e:  # noqa: BLE001 - report and keep going with the rest
+            print(f"{name}: error: {e}", file=sys.stderr)
+            continue
+        for key, value in stats.items():
+            total[key] += value
+        verb = "would rename" if args.dry_run else "renamed"
+        print(
+            f"{name}: {verb} {stats['renamed']} file(s), {stats['tasks']} task(s), "
+            f"{stats['versions']} version(s), {stats['skipped']} skipped"
+        )
+    verb = "would rename" if args.dry_run else "renamed"
+    print(f"total: {verb} {total['renamed']} file(s) across {len(names)} project(s)")
+    return 0
+
+
 def cmd_storage_usage(args) -> int:
     _, _, _, storage = _services(args)
-    if not hasattr(storage, "usage"):
-        print(f"backend {storage.kind!r} has no local usage information")
-        return 0
     stats = storage.usage()
     print(f"{stats['files']} files, {stats['bytes'] / 1024**2:.1f} MiB ({storage.root_dir})")
     return 0
@@ -283,6 +431,28 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--project", default="", help="only this project")
     migrate.add_argument("--dry-run", action="store_true")
     migrate.set_defaults(func=cmd_migrate_layout)
+
+    anno_ids = sub.add_parser("migrate-anno-ids", help="re-key annotations to sha256(<project key>/<rel>)")
+    anno_ids.add_argument("--project", default="", help="only this project")
+    anno_ids.add_argument("--dry-run", action="store_true")
+    anno_ids.set_defaults(func=cmd_migrate_anno_ids)
+
+    sync_instances = sub.add_parser(
+        "sync-instances", help="mirror annotation documents into the instance registry"
+    )
+    sync_instances.add_argument("--project", default="", help="only this project")
+    sync_instances.set_defaults(func=cmd_sync_instances)
+
+    import_annos = sub.add_parser(
+        "import-annotations",
+        help="import legacy <anno_id>.zlabel files (re-keyed + DB rows + mirrors)",
+    )
+    import_annos.add_argument("--source", required=True, help="folder holding the .zlabel files")
+    import_annos.add_argument("--project", required=True, help="target server project (already scanned)")
+    import_annos.add_argument("--state", default="", help="set this task state (e.g. approved)")
+    import_annos.add_argument("--overwrite", action="store_true", help="replace differing targets")
+    import_annos.add_argument("--dry-run", action="store_true")
+    import_annos.set_defaults(func=cmd_import_annotations)
     return parser
 
 

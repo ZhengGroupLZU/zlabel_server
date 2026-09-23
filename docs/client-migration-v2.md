@@ -8,7 +8,7 @@
 
 | 层 | 文件 | 改动 |
 |---|---|---|
-| API 客户端 | `zlabel/utils/api_helper.py` | 重写为 v2 协议的 `ZLServerApiClient`（方法名尽量保持不变，减少上层改动）；旧的 `{message,data}` 信封/OpenList-token 逻辑删除 |
+| API 客户端 | `zlabel/utils/api_helper.py` | 重写为 v2 协议的 `ZLServerApiClient`（方法名尽量保持不变，减少上层改动）；旧的 `{message,data}` 信封逻辑删除 |
 | 组装 | `zlabel/utils/session.py` | 直接组装 v2 客户端；暴露 `claim/release/submit/review/versions` 等新能力，并把登录时探测到的 `capabilities` 透给 UI |
 | Storage/Inference | `zlabel/utils/backend.py` | `RemoteStorage` 补领取/状态/版本方法；`RemoteInference` 去掉"当前帧"假设 |
 | 模型 | `zlabel/utils/project.py` | `Task` 增 `state/claimed_by/lease_expires_at/version/group/day(服务端)`；`User` 增 `role` |
@@ -27,7 +27,7 @@
 > C11 zh_CN 全量翻译（375 条，0 unfinished）、C12 端到端覆盖：`tests/v2/test_client_contract.py`
 > 含"两人抢同一帧 → 租约过期 → 接管 → 前者保存被拒（带持有者名）→ reviewer 强制接管"，
 > 以及领取→保存→提交→复核→退回→重开与版本历史全链路。
-> 剩余：仅 M5 验收（DoD 逐条走查 + 真实 OpenList/GPU 环境试跑）。
+> 剩余：仅 M5 验收（DoD 逐条走查 + 真实数据集/CUDA 环境试跑）。
 
 
 ### C1 版本与能力探测（阻塞项）
@@ -38,7 +38,7 @@
 ### C2 认证与会话
 - 登录响应新增 `user{name,role}` 与 `expires_at`；写入 `settings.username`/状态栏（显示角色：标注员/复核员/管理员）。
 - 新增 `logout()`；会话失效（401 `session_stale`）→ 自动重登一次，失败则弹"请重新登录"。
-- token 语义变化：客户端持有的是**服务端 session token**（不是 OpenList token），仅内存持有；`session_stale` 时重新登录。
+- token 语义变化：客户端持有的是**服务端签发的 session token**，仅内存持有；401（含 `session_stale`）时重新登录。
 
 ### C3 任务拉取（去掉文件名硬猜）
 - 改用 `GET /api/v2/projects/{p}/tasks?state=&claim=&mine=&limit=&order=sequence`；直接用服务端 `group/day`。
@@ -67,7 +67,7 @@
 
 ### C8 图像获取
 - 改调 `GET /api/v2/projects/{p}/images/{rel_path}`（ETag/`If-None-Match`）；v2.1 可加磁盘缓存（`~/.zlabel/cache/<sha>`）。
-- 相对路径口径统一：**客户端一律传项目内相对路径 + project**；不再依赖服务端返回绝对路径（旧协议把 OpenList 绝对路径塞在 `filename` 里）。
+- 相对路径口径统一：**客户端一律传项目内相对路径 + project**；不再依赖服务端返回绝对路径（旧协议把上游绝对路径塞在 `filename` 里）。
 
 ### C9 标签
 - 从 `GET /api/v2/projects/{p}/labels` 拉取（含颜色/排序/归档），替换现在"从已上传标注里合并名字"的做法。

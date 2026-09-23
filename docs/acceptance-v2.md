@@ -1,6 +1,6 @@
 # v2 验收清单（M5）
 
-逐条对应 `docs/architecture-v2.md` §14 的 DoD。每条给出**自动化证据**（仓库内可复跑）与**手工步骤**（真实 OpenList/GPU 环境）。
+逐条对应 `docs/architecture-v2.md` §14 的 DoD。每条给出**自动化证据**（仓库内可复跑）与**手工步骤**（真实数据集/CUDA 环境）。
 跑自动化：
 
 ```bash

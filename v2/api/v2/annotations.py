@@ -1,8 +1,8 @@
 """``/api/v2/projects/{project}/annotations`` — read, save, version history.
 
 The request body of ``PUT`` is the *annotation document itself* (no envelope), so
-the file stored in OpenList stays byte-compatible with the desktop mirror.
-``base_version``, ``force`` and ``note`` travel as query parameters.
+the stored file stays byte-compatible with the desktop mirror. ``base_version``,
+``force`` and ``note`` travel as query parameters.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ def get_annotation(
 ) -> Response:
     """The stored document; ``404 not_found`` means "not annotated yet"."""
     services.projects.require_access(auth, project)
-    content, version = services.annotations.get(project, anno_id, auth.oplist_token)
+    content, version = services.annotations.get(project, anno_id)
     return Response(
         content=content,
         media_type="application/json",
@@ -77,7 +77,7 @@ def get_version(
 ) -> Response:
     """Content of a stored version (the current one included)."""
     services.projects.require_access(auth, project)
-    content = services.annotations.get_version(project, anno_id, version, auth.oplist_token)
+    content = services.annotations.get_version(project, anno_id, version)
     return Response(
         content=content,
         media_type="application/json",

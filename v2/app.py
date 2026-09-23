@@ -7,8 +7,7 @@ of monkeypatching module globals — the main structural fix over v1.
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -19,6 +18,7 @@ from v2.api.v2 import (
     auth,
     health,
     images,
+    instances,
     internal,
     labels,
     members,
@@ -46,21 +46,9 @@ def create_app(
     settings.ensure_dirs()
     db = database or Database(settings.database_url)
 
-    async def _scan(app: FastAPI) -> None:
-        try:
-            projects = app.state.services.projects
-            await asyncio.to_thread(lambda: projects.scan_and_sync(force=True))
-        except Exception as e:  # noqa: BLE001 - startup must never die on OpenList
-            logger.warning(f"project scan unavailable: {e}")
-
-    async def _periodic_scan(app: FastAPI) -> None:
-        while True:
-            await asyncio.sleep(settings.project_scan_interval)
-            await _scan(app)
-
     def _bootstrap_admin() -> None:
-        """Create the first local admin from the environment (first run only)."""
-        if settings.identity != "local" or not settings.bootstrap_admin:
+        """Create the first admin from the environment (first run only)."""
+        if not settings.bootstrap_admin:
             return
         if not settings.bootstrap_password:
             logger.warning(
@@ -77,22 +65,12 @@ def create_app(
             logger.error(f"bootstrap admin failed: {e}")
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(_app: FastAPI):
         logger.info(f"v{settings.version} starting (db={db.url})")
         _bootstrap_admin()
-        tasks: list[asyncio.Task] = []
-        if settings.scan_on_startup:
-            tasks.append(asyncio.create_task(_scan(app)))
-        if settings.project_scan_interval > 0:
-            tasks.append(asyncio.create_task(_periodic_scan(app)))
         try:
             yield
         finally:
-            for task in tasks:
-                task.cancel()
-            for task in tasks:
-                with suppress(asyncio.CancelledError):
-                    await task
             db.dispose()
 
     app = FastAPI(title=settings.app_name, version=settings.version, lifespan=lifespan)
@@ -133,6 +111,7 @@ def create_app(
     app.include_router(projects.router, prefix=API_PREFIX)
     app.include_router(labels.router, prefix=API_PREFIX)
     app.include_router(members.router, prefix=API_PREFIX)
+    app.include_router(instances.router, prefix=API_PREFIX)
     app.include_router(admin.router, prefix=API_PREFIX)
     app.include_router(tasks.router, prefix=API_PREFIX)
     app.include_router(annotations.router, prefix=API_PREFIX)

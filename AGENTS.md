@@ -1,9 +1,11 @@
 # AGENTS.md
 
-FastAPI labeling backend for the ZLabel desktop client: OpenList (file storage +
-identity source), SQLite, ONNXRuntime (SAM family). **v2 rewrite in progress** —
-v1 (`app/`) was deleted; its last state is the `onnx` branch (`fc04ef4`) and the
-design lives in `docs/architecture-v2.md` (read it before structural changes).
+FastAPI labeling backend for the ZLabel desktop client: **self-hosted** (the server
+owns `ZLSERVER_STORAGE_ROOT` and its account table), SQLite, ONNXRuntime (SAM
+family). v2 is implemented; v1 (`app/`) was deleted and its last state is the
+`onnx` branch (`fc04ef4`). The storage/identity layers were rebuilt without
+OpenList (P6 done, see `docs/plan-selfhosted-storage.md`); the design record lives
+in `docs/architecture-v2.md` (read it before structural changes).
 
 ## Commands
 
@@ -12,19 +14,54 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
   `user ls` · `user passwd <name>` · `user role <name> <role>` · `project ls` ·
   `project members <project>` · `project add-member <project> <user> --role ...` ·
   `storage usage` · `migrate-layout --root <storage-root> [--dry-run]` (moves
-  `<project>/zlabel` to `<project>/.zlabel/annos`; see `docs/plan-selfhosted-storage.md`)
+  `<project>/zlabel` to `<project>/.zlabel/annos`) ·
+  `migrate-anno-ids [--project <name>] [--dry-run]` (re-keys legacy
+  `md5("<project name>/<rel>")` annotation files/rows to `sha256("<project key>/<rel>")`) ·
+  `sync-instances [--project <name>]` (re-mirror stored documents into the
+  instance registry) ·
+  `import-annotations --source <dir> --project <name> [--state approved] [--dry-run]
+  [--overwrite]` (migrate a legacy folder: copy each ``*.zlabel`` byte-for-byte under
+  its new ``sha256(<project key>/<rel>)`` name and create the annotation/history rows
+  + label/instance mirrors; run it after scanning the project)
 - **Web admin UI** (`/admin`, `ZLSERVER_ADMIN_ENABLED` to turn it off):
   `starlette-admin` mounted in `create_app` with `ZLabelAuthProvider` - a **cookie**
   session for the admin role, backed by the same `AuthService`/sessions as the API
-  (the desktop keeps using Bearer tokens). Pages: dashboard (storage/projects/
-  states), Users, Projects (metadata only), Members, Labels, read-only Frames and
-  Audit log. Anything with a side effect outside the database (creating a project
-  directory, hashing a password, uploading frames) is **not** offered there - those
-  stay in the API/CLI, so this layer can be replaced page by page later
-  (`v2/admin/`; see `docs/plan-selfhosted-storage.md`).
+  (the desktop keeps using Bearer tokens).
+  Write pages (hand-built HTML, all calls go through the services):
+  **Users** (filter/create/role/enable/password reset - audits and revokes the
+  target's sessions), **Projects** (list/filter/create; per-project detail tabs:
+  overview with rename/metadata (display name, description, active, timeline), files with
+  browse/upload/preview/download/delete,
+  members, labels, instances, frames with a state filter) and **Files** (the whole
+  storage
+  root). Projects also has a **Danger zone** on the Overview tab: deleting requires
+  typing the project name exactly and offers "also delete the files on disk"
+  (default on); the list rows link there. The **Labels** tab shows each label's
+  0-based ordinal as its `id` (the
+  class id the COCO/YOLO exports use), sorted by that position; the **⠿ handle in
+  the first column** is the only draggable element (inline script) and dragging just
+  reorders the DOM and rewrites the form's hidden ``order`` field — one **Save all
+  labels** button then posts the whole table to ``/label/save-all``
+  (`ProjectService.save_labels`: field edits audited per label, ``sort`` rewritten to
+  0..N-1; `Label.id` is untouched). New labels are appended and get an unused palette
+  colour (`v2/services/label_palette.py`); the colour control is a dropdown of
+  swatch + hex entries plus a hex field (``#rrggbb``/``#rgb``/bare ``rrggbb``). **Dashboard** is the landing page: storage usage, progress, the project
+  table and a rescan button. The only remaining starlette-admin ``ModelView`` is the
+  read-only **Audit log** (its actor is a plain ``actor`` string field - the ``users``
+  table has no ModelView, and a relation field without a target view is rejected).
+  Frames/Labels/Members/Storage/Accounts no longer exist as separate pages.
+  ``can_create``/``can_edit``/``can_delete`` must be **sync** methods - 1.x calls
+  them without awaiting, so an ``async def`` override is always truthy (`v2/admin/`).
 - Admin REST (global `admin` role): `/api/v2/admin/users` (+ `/{id}`, `/{id}/password`),
-  `/api/v2/admin/storage`, `/api/v2/admin/files` (list/upload/download/delete/mkdir/move,
-  local backend only). Project membership: `/api/v2/projects/{p}/members`. Project
+  `/api/v2/admin/storage`, `/api/v2/admin/files` (list/upload/download/delete/mkdir/move).
+  Project instances: `/api/v2/projects/{p}/instances` (+ `/{number}`, `/{number}/results`,
+  `/statuses`) - the project-scoped objects the documents' `instance_id` points at.
+  `DELETE /api/v2/projects/{p}?delete_files=true|false` (admin only) removes the
+  project: registry rows + files by default, directory only when `delete_files=false`.
+  Project labels: `/api/v2/projects/{p}/labels` (+ `/{id}`, `PUT /order` to set the
+  order - the 0-based position is the label's ordinal id / export class id).
+  Account writes all go through `AuthService.create_user/update_user/set_password`,
+  which audit and revoke sessions. Project membership: `/api/v2/projects/{p}/members`. Project
   visibility follows `ZLSERVER_PROJECT_ACCESS_MODE` (`open` default = pre-P4 behaviour,
   `strict` = members only, global admins always see everything).
 - Migrations: `uv run alembic upgrade head` · `uv run alembic revision --autogenerate -m "msg"`
@@ -41,8 +78,8 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
   `uv run pytest -m slow` (real ONNX models, minutes) ·
   `uv run pytest -m gpu` (CPU/CUDA parity; needs a working CUDA/cuBLAS stack)
 - Lint: `uv run ruff check .` and `uv run ruff format .` (line-length 110)
-- Docker: `docker compose up` (server + openlist; the inference worker service is
-  commented out until M3)
+- Docker: `docker compose up` (API + inference worker; datasets come from the
+  host directory mounted at `ZLSERVER_STORAGE_ROOT`)
 
 ## Milestones (see `docs/architecture-v2.md` §12)
 
@@ -50,18 +87,25 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 |---|---|
 | M0 | v1 frozen baseline (`fc04ef4`) — done |
 | M1 | v2 skeleton: app factory, config/errors/logging, models + alembic, `/api/v2/health` — done |
-| M1b | inference assets → `inference/`, vendored SDK → `v2/vendor/`, v1 deleted, infra/docs — done |
+| M1b | inference assets → `inference/`, v1 deleted, infra/docs — done |
 | M2 | services + v2 endpoints (auth/projects/tasks/annotations/images/labels/progress/predict) — done |
 | M3 | inference worker process (`/infer`, embedding snapshots by image sha256, health, metrics) — done |
-| M4 | desktop client switches to `/api/v2` (`docs/client-migration-v2.md`) — **next** |
+| M4 | desktop client switches to `/api/v2` (`docs/client-migration-v2.md`) — in progress |
 | M5 | acceptance (DoD §14) |
+| P0–P6 | self-hosted storage + accounts, OpenList removed (`docs/plan-selfhosted-storage.md`) — done |
 
 ## Contracts that must not break
 
-- **anno_id**: `md5("<project>/<project-relative posix path>")` (`v2/contracts/ids.py`),
-  identical to the desktop client's `zlabel.utils.project.anno_id_for`. Local mirrors
-  and OpenList annotation files stay interchangeable only while this holds.
-- **Annotation files stay in OpenList** at `{ZLSERVER_OPLIST_PROJ_DIR}/{project}/zlabel/<anno_id>.zlabel`;
+- **anno_id**: `sha256("<project key>/<project-relative posix path>")` (`v2/contracts/ids.py`),
+  identical to the desktop client's `zlabel.utils.project.anno_id_for`. The **project key**
+  is the dataset's `.zlabel/project.json` `"id"` (the desktop's `Project.id`), stored in
+  `projects.key`; `ProjectService.ensure_project_key` adopts it, restores the DB one when
+  the file is missing and mints a new one otherwise, so renaming the directory or the
+  display name never invalidates annotations. `legacy_anno_id_for` keeps the old
+  `md5("<project name>/<rel>")` formula for `v2.cli migrate-anno-ids` only.
+- **Annotation files live in the storage tree** at
+  `{ZLSERVER_STORAGE_ROOT}/{project}/{ZLSERVER_ANNO_DIR}/<anno_id>.zlabel`
+  (`anno_dir` defaults to `.zlabel/annos`, history under `_history/<anno_id>/v<n>.zlabel`);
   the DB keeps metadata/versions only.
 - **Error model**: `{code, message, detail}` with machine-readable codes
   (`unauthorized`/`session_stale`/`forbidden`/`not_found`/`conflict`/`lease_conflict`/
@@ -70,18 +114,20 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - **Capabilities** in `GET /api/v2/health` (`v2/api/v2/health.py: CAPABILITIES`):
   the desktop gates claim/review/version UI on them — add a capability whenever a
   new client-visible feature appears.
-- **Auth**: the client holds a server session token; the user's OpenList token is
-  stored inside `sessions.oplist_token` and used for FS calls. Never store passwords.
-- **Whose OpenList token?** Split by direction, on purpose:
-  * **reads** (frames, annotation documents, history) use the **session user's**
-    token, so a user only sees what their own OpenList ACLs allow;
-  * **writes** (annotation + history files, project directories/marker) use the
-    **service account** (`ZLSERVER_OPLIST_TOKEN`, else `ZLSERVER_OPLIST_USERNAME` /
-    `PASSWORD`), because annotator accounts are read-only by design. The service
-    account is also the background scanner's identity.
-  A wrong token shows up as OpenList's 403 `permission denied` (the message names
-  the refused operation); the *attribution* of a save is unaffected — it comes from
-  the session (`annotations.author_id`, audit rows).
+- **Instance numbers are document references**: `Result.instance_id` /
+  `Annotation.instances[number]` name an `instances` row (unique per project), so
+  the number is **never renumbered** by the server. `InstanceService.sync_document`
+  mirrors every annotation save into `instances`/`instance_results` (instances are
+  created on first sight: status from the document, colour from the palette; the
+  admin's edits win, an empty status is filled from later documents), and
+  `v2.cli sync-instances` backfills documents saved before the tables existed.
+  Deleting an instance removes only the registry row + links; a later save that
+  still uses the number recreates it.
+- **Auth**: the client holds an opaque server session token (`Authorization:
+  Bearer`); the DB stores only its sha256. Passwords are scrypt hashes in `users`
+  (`LocalIdentity`), never plaintext. Role/enable/password changes revoke the
+  account's sessions (`AuthService.update_user`/`set_password`), and the desktop
+  re-logs in on 401.
 
 ## Architecture
 
@@ -91,30 +137,32 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - `v2/core/` — `config.py` (`ZLSERVER_*` settings, `get_settings()` cached),
   `errors.py` (ApiError hierarchy + handlers), `logging.py` (request-id aware).
 - `v2/db/` — `base.py` (`Database.session_scope`, `get_session` dependency),
-  `models.py` (users, sessions, projects, labels, tasks, annotations,
-  annotation_versions, audit_log, link tables), `migrations/` (alembic).
+  `models.py` (users, sessions, projects, project_members, labels, tasks, instances,
+  instance_results, annotations, annotation_versions, audit_log, link tables),
+  `migrations/` (alembic).
   State machine: `draft → submitted → approved|rejected`; claim trio
   `claimed_by/claimed_at/lease_expires_at`.
-- `v2/api/v2/` — routers only (thin): `auth`, `projects`, `labels`, `tasks`,
-  `annotations`, `images`, `predict`, `health`; shared dependencies live in
+- `v2/api/v2/` — routers only (thin): `auth`, `projects`, `labels`, `instances`,
+  `tasks`, `annotations`, `images`, `predict`, `health`; shared dependencies live in
   `v2/api/deps.py` (`get_services`, `get_auth`, `require_roles`).
 - `v2/services/` — business logic: `auth_service` (sessions/roles),
-  `project_service` (discovery/sync, labels, progress), `task_service`
+  `project_service` (discovery/sync, labels, progress), `instance_service`
+  (project-scoped instances: mirrored from documents + CRUD), `task_service`
   (listing, claim+lease, submit/review), `annotation_service` (versioned save,
-  history), `image_store` (content-addressed uploads), `grouping`, `audit`,
-  `container` (the `Services` dataclass built by `create_app`).
+  history), `image_store` (content-addressed uploads), `label_palette`
+  (auto-assigned label colours), `grouping`, `audit`, `container` (the `Services`
+  dataclass built by `create_app`).
 - `v2/adapters/` — the swappable edges:
-  * `storage.py`: the `StorageBackend` protocol (paths + 8 IO methods) and
-    `build_storage()`; `local_disk.py` is the self-hosted backend (atomic writes,
-    traversal-proof, `.zlabel/annos` layout), `openlist.py` the external one.
-    Pick with `ZLSERVER_STORAGE_BACKEND`; both are held to
-    `tests/v2/test_storage_contract.py`.
-  * `identity.py`: the `IdentityProvider` protocol + `LocalIdentity` (scrypt
-    hashes in `users`, stdlib only) + `OpenListIdentity` (migration);
-    `ZLSERVER_IDENTITY` picks one, `ZLSERVER_BOOTSTRAP_ADMIN/PASSWORD` creates the
-    first admin once (never resets an existing password).
+  * `storage.py`: the `StorageBackend` protocol (paths + IO methods, no credential
+    arguments) and `build_storage()`; `local_disk.py` is the only implementation
+    (atomic writes, traversal-proof, every top-level directory is a project).
+  * `identity.py`: the `IdentityProvider` protocol + `LocalIdentity` (scrypt hashes
+    in `users`, stdlib only); `ZLSERVER_BOOTSTRAP_ADMIN/PASSWORD` creates the first
+    admin once (never resets an existing password).
   * `inference.py`: `InferenceClient` → the worker's `/infer`.
-- `v2/vendor/openlist_api/` — vendored third-party SDK (do not edit; wrap it).
+- `v2/admin/` — the starlette-admin UI: `auth.py` (`ZLabelAuthProvider` cookie
+  sessions + `admin_context`), `views.py` (write pages + model views with the
+  service-layer hooks), `__init__.py` (`build_admin`/`mount_admin`).
 - `v2/inference_worker/` — the model's own process: `main.py`
   (`create_worker_app`: `/infer` + `/health` + `/metrics`), `engine.py`
   (`InferenceEngine`: admission queue, embedding snapshots, crop handling,
@@ -136,17 +184,31 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - **SAM3 CUDA quirks (respect the code comments)**: the vision encoder's CUDA arena
   holds ~7GB and never shrinks, so `Sam3Runner` builds the vision session per encode
   and releases it; the text encoder is deliberately pinned to CPU.
-- **404 semantics depend on the vendored SDK**: OpenList reports "object not found"
-  as HTTP 200 + `{"code": 500, ...}` (sometimes a plain 500); `BaseClient` maps any
-  error whose message contains "not found" to `NotFoundError(404)`. Never turn that
-  into a blanket 500.
+- **A missing file is a 404, not a 500**: `LocalDiskBackend` raises `NotFound` for
+  absent paths and `UpstreamError` only for real IO failures; never widen that.
+- **SQLite foreign keys are ON in the app**: `Database` installs
+  `PRAGMA foreign_keys=ON` on every connection, so the models'
+  `ondelete="CASCADE"/"SET NULL"` actually apply (a delete no longer leaves orphan
+  link rows). Alembic builds its own engine and keeps the default (off) on purpose:
+  batch migrations recreate tables and enforced constraints would get in the way.
+  A database that predates the pragma may still hold orphans — `PRAGMA
+  foreign_key_check` lists them; `ProjectService.delete_project` still removes its
+  children explicitly (works on any backend, and the file removal stays inside the
+  same transaction: a permission error rolls everything back).
 - `tests/conftest.py` is shared (image fixtures + `FakePredictor`); v2 API tests use
-  `tests/v2/conftest.py` (in-memory DB, fake OpenList, `auth_headers` helper) and
-  `tests/v2/fakes.py` (`FakeOpenList`, `FakeInference`).
-- The API suite disables scanners (`scan_on_startup=False`, `project_scan_interval=0`)
-  so tests stay deterministic; `tests/v2/test_startup.py` covers the scan itself and
-  must use a **file-backed** DB — the in-memory StaticPool connection cannot be
-  shared with the scan thread.
+  `tests/v2/conftest.py` (in-memory DB, real temp storage, `auth_headers` helper) and
+  `tests/v2/fakes.py` (`LocalBackendHarness`, `FakeInference`). The fixture that used
+  to be called `ol` is `harness`; it seeds the real storage root.
+- **Timeline is per project**: `projects.timeline` (default on) decides whether the
+  scanner parses `group_name`/`day` from the frame path (`species/dish/D{n}.png`).
+  With it off the tasks keep `""/0`, and toggling it in the admin UI (Projects ▸
+  Overview, or `PATCH /projects/{p}` with `timeline`) recomputes every existing task
+  in the same transaction. The desktop hides nothing yet — it just sees empty groups.
+- **Scanning is manual only**: the app factory starts no scan thread and the config has no
+  `scan_on_startup`/`project_scan_interval` any more. `tests/v2/test_startup.py` asserts that a fresh app
+  leaves the task table empty (the dataset on disk stays invisible) and that `POST /projects/scan` is the
+  trigger - use a **file-backed** DB there (the in-memory StaticPool connection cannot be shared with a
+  scan thread).
 - **Serving cache = image state snapshots.** `runner.export_image_state()/import_image_state()`
   (and the `Predictor` wrappers) move the encoded image around; the worker caches
   them per `sha256(+crop)` and restores instead of re-encoding. If you add state to
@@ -158,7 +220,12 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 - Listing parameters the desktop relies on: `state` accepts a comma separated list
   (`draft,rejected`), `order` is `sequence|id|recent|random`, and
   `POST /projects/{p}/scan` works for a project that does not exist yet (finding new
-  OpenList directories is the point of a scan).
+  directories under the storage root is the point of a scan).
+- **Renaming a dataset directory by hand re-keys it**: a scan adopts the key from
+  `.zlabel/project.json`; if the same key already belongs to another project (a copied
+  dataset, or the row of the old directory name), the scanner mints a new key and
+  writes it back. Run `uv run python -m v2.cli migrate-anno-ids` afterwards to rename
+  the annotation files of that project.
 - Claim state: `draft → submitted → approved|rejected` (`reopen` pulls back to draft).
   A claim carries `lease_expires_at`; an expired lease is claimable by anyone, a live
   one answers 409 `lease_conflict` with the holder + expiry. Saves renew the lease and
@@ -169,9 +236,9 @@ design lives in `docs/architecture-v2.md` (read it before structural changes).
 
 ## Decisions (already agreed with the user — do not relitigate)
 
-1. **OpenList is the identity source**: login proxy + server-issued session token;
-   local `users` rows hold role/stats; the user's OpenList token is kept in the
-   session for per-user file ACLs.
+1. **Self-hosted**: the server owns the storage tree and the accounts (scrypt in
+   `users`); the client holds an opaque session token. OpenList support was removed
+   in P0–P6 — do not reintroduce a storage/identity abstraction for it.
 2. **Only `/api/v2`**; v1 is deleted; server and desktop ship together (no compat
    layer, no gradual rollout) — hence `GET /api/v2/health` version/capability checks.
 3. **Inference runs in a separate process**; embeddings cached by image sha256

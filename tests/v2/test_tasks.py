@@ -12,10 +12,10 @@ from v2.db.models import Annotation, AuditLog, Task, utcnow
 ROOT = "/zlabel_server/projects"
 
 
-def bootstrap(client, auth_headers, ol, files=("a.png", "b.png")) -> dict:
+def bootstrap(client, auth_headers, harness, files=("a.png", "b.png")) -> dict:
     """One project, synced; returns {"admin": headers, "bob": headers}."""
-    seed(ol, "projA", files=files)
-    ol.users["bob"] = "pw"
+    seed(harness, "projA", files=files)
+    harness.users["bob"] = "pw"
     admin = auth_headers(client, "rainy")
     client.post("/api/v2/projects/scan", headers=admin)
     return {"admin": admin, "bob": auth_headers(client, "bob", "pw")}
@@ -34,9 +34,9 @@ def add_annotation(db, anno_id: str) -> None:
 
 
 # region listing
-def test_list_tasks_filters_and_pagination(client, auth_headers, ol):
+def test_list_tasks_filters_and_pagination(client, auth_headers, harness):
     headers = bootstrap(
-        client, auth_headers, ol, files=("images/dish01/D1.png", "images/dish01/D2.png", "z.png")
+        client, auth_headers, harness, files=("images/dish01/D1.png", "images/dish01/D2.png", "z.png")
     )
     body = client.get(
         "/api/v2/projects/projA/tasks", params={"order": "sequence"}, headers=headers["admin"]
@@ -62,9 +62,9 @@ def test_list_tasks_filters_and_pagination(client, auth_headers, ol):
     assert bad.status_code == 422 and bad.json()["code"] == "validation_error"
 
 
-def test_groups_endpoint_returns_frames_per_sequence(client, auth_headers, ol):
+def test_groups_endpoint_returns_frames_per_sequence(client, auth_headers, harness):
     headers = bootstrap(
-        client, auth_headers, ol, files=("species/dish/D1.png", "species/dish/D2.png", "loose.png")
+        client, auth_headers, harness, files=("species/dish/D1.png", "species/dish/D2.png", "loose.png")
     )
     groups = client.get("/api/v2/projects/projA/groups", headers=headers["admin"]).json()
     by_name = {g["group"]: g for g in groups}
@@ -77,8 +77,8 @@ def test_groups_endpoint_returns_frames_per_sequence(client, auth_headers, ol):
 
 
 # region claim / lease
-def test_claim_then_conflict_for_the_second_annotator(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_claim_then_conflict_for_the_second_annotator(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
 
     first = client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
@@ -94,16 +94,16 @@ def test_claim_then_conflict_for_the_second_annotator(client, auth_headers, ol):
     assert body["detail"]["lease_expires_at"]
 
 
-def test_claim_is_idempotent_for_the_holder(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_claim_is_idempotent_for_the_holder(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
     again = client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
     assert again.status_code == 200 and again.json()["claimed_by"] == "rainy"
 
 
-def test_expired_lease_can_be_taken_over(client, auth_headers, ol, db):
-    headers = bootstrap(client, auth_headers, ol)
+def test_expired_lease_can_be_taken_over(client, auth_headers, harness, db):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
     with db.session_scope() as session:
@@ -113,8 +113,8 @@ def test_expired_lease_can_be_taken_over(client, auth_headers, ol, db):
     assert stolen.status_code == 200 and stolen.json()["claimed_by"] == "bob"
 
 
-def test_reviewer_can_force_a_claim(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_reviewer_can_force_a_claim(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
 
@@ -126,8 +126,8 @@ def test_reviewer_can_force_a_claim(client, auth_headers, ol):
     assert forced.status_code == 200
 
 
-def test_heartbeat_and_release(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_heartbeat_and_release(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
 
@@ -145,8 +145,8 @@ def test_heartbeat_and_release(client, auth_headers, ol):
 
 
 # region submit / review
-def test_submit_requires_the_claim_and_an_annotation(client, auth_headers, ol, db):
-    headers = bootstrap(client, auth_headers, ol)
+def test_submit_requires_the_claim_and_an_annotation(client, auth_headers, harness, db):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["bob"])
 
@@ -168,8 +168,8 @@ def test_submit_requires_the_claim_and_an_annotation(client, auth_headers, ol, d
     assert client.post(f"/api/v2/tasks/{anno}/submit", headers=headers["bob"]).status_code == 409
 
 
-def test_review_requires_a_reviewer_and_a_note_on_reject(client, auth_headers, ol, db):
-    headers = bootstrap(client, auth_headers, ol)
+def test_review_requires_a_reviewer_and_a_note_on_reject(client, auth_headers, harness, db):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["bob"])
     add_annotation(db, anno)
@@ -208,8 +208,8 @@ def test_review_requires_a_reviewer_and_a_note_on_reject(client, auth_headers, o
     assert again.status_code == 200 and again.json()["state"] == "rejected"
 
 
-def test_approve_end_to_end(client, auth_headers, ol, db):
-    headers = bootstrap(client, auth_headers, ol)
+def test_approve_end_to_end(client, auth_headers, harness, db):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
     add_annotation(db, anno)
@@ -223,8 +223,8 @@ def test_approve_end_to_end(client, auth_headers, ol, db):
     assert progress["approved"] == 1 and progress["finished"] == 1 and progress["total"] == 2
 
 
-def test_approved_task_needs_a_reviewer_to_reopen(client, auth_headers, ol, db):
-    headers = bootstrap(client, auth_headers, ol)
+def test_approved_task_needs_a_reviewer_to_reopen(client, auth_headers, harness, db):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     add_annotation(db, anno)
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
@@ -237,8 +237,8 @@ def test_approved_task_needs_a_reviewer_to_reopen(client, auth_headers, ol, db):
     assert reopened.json()["state"] == "draft" and reopened.json()["submitted_at"] is None
 
 
-def test_my_stats_and_audit_trail(client, auth_headers, ol, db):
-    headers = bootstrap(client, auth_headers, ol)
+def test_my_stats_and_audit_trail(client, auth_headers, harness, db):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["bob"])
 
@@ -253,17 +253,17 @@ def test_my_stats_and_audit_trail(client, auth_headers, ol, db):
 # endregion
 
 
-def test_random_order_returns_the_requested_page(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol, files=("a.png", "b.png", "c.png"))
+def test_random_order_returns_the_requested_page(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness, files=("a.png", "b.png", "c.png"))
     page = client.get(
         "/api/v2/projects/projA/tasks", params={"order": "random", "limit": 2}, headers=headers["admin"]
     ).json()
     assert page["total"] == 3 and len(page["items"]) == 2
 
 
-def test_heartbeat_needs_a_live_lease(client, auth_headers, ol, db):
+def test_heartbeat_needs_a_live_lease(client, auth_headers, harness, db):
     """A lapsed or released lease cannot be renewed - re-claim instead."""
-    headers = bootstrap(client, auth_headers, ol)
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["admin"])
 

@@ -1,15 +1,11 @@
 """Who the users are, independent of where the bytes live.
 
-Two providers:
+``LocalIdentity`` stores the accounts itself: scrypt hashes in our ``users`` table
+(stdlib only, no extra dependency), so a deployment needs no external service.
 
-- ``OpenListIdentity`` keeps the external service as the account source (during a
-  migration), proxying ``login``/``current_user`` through the OpenList client.
-- ``LocalIdentity`` stores its own accounts: scrypt hashes in our ``users`` table
-  (stdlib only, no extra dependency). This is what makes a deployment run with no
-  external service at all.
-
-A session token is ours either way: the provider only answers "are these
-credentials valid, and who is it".
+The ``IdentityProvider`` Protocol is the seam: a future SSO/LDAP provider only has
+to answer "are these credentials valid, and who is it" — the session token is ours
+in any case.
 """
 
 from __future__ import annotations
@@ -160,7 +156,7 @@ class LocalIdentity:
                 return {"id": user.id, "name": user.name, "role": user.role}
             if user is None:
                 user = User(
-                    oplist_user_id=f"local:{name}",
+                    identity_id=f"local:{name}",
                     name=name,
                     email=email,
                     role=ROLE_ADMIN if admin else role,
@@ -179,47 +175,6 @@ class LocalIdentity:
             return {"id": user.id, "name": user.name, "role": user.role}
 
 
-class OpenListIdentity:
-    """Accounts still live in OpenList (migration period)."""
-
-    kind = "openlist"
-
-    def __init__(self, storage) -> None:
-        self.storage = storage  # an OpenListAdapter
-
-    def verify(self, username: str, password: str) -> dict[str, Any] | None:
-        from v2.core.errors import ApiError
-
-        try:
-            token = self.storage.login(username, password)
-            remote = self.storage.current_user(token)
-        except ApiError as e:
-            logger.info(f"OpenList rejected the credentials: {e}")
-            return None
-        return {
-            "id": remote.get("id") or f"openlist:{username}",
-            "name": remote.get("name") or username,
-            "email": remote.get("email") or "",
-            "token": token,
-        }
-
-    def set_password(self, username: str, password: str) -> bool:
-        logger.warning("OpenList owns the accounts; change the password there")
-        return False
-
-
-def build_identity(settings: Settings, *, db, storage, identity: str | None = None) -> IdentityProvider:
-    """Pick the configured provider and refuse impossible combinations."""
-    kind = identity or settings.identity
-    if kind == "local":
-        if settings.storage_backend != "local":
-            raise ValidationFailed(
-                "ZLSERVER_IDENTITY=local requires ZLSERVER_STORAGE_BACKEND=local "
-                "(an external storage service needs the user's own token)"
-            )
-        return LocalIdentity(db, settings)
-    from v2.adapters.openlist import OpenListAdapter
-
-    if getattr(storage, "kind", "") == "openlist":
-        return OpenListIdentity(storage)
-    return OpenListIdentity(OpenListAdapter(settings))
+def build_identity(settings: Settings, *, db) -> IdentityProvider:
+    """Build the identity provider (one implementation today, kept injectable)."""
+    return LocalIdentity(db, settings)

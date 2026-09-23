@@ -34,7 +34,7 @@ class Unauthorized(ApiError):
 
 
 class SessionStale(ApiError):
-    """The session exists locally but the upstream (OpenList) token is gone."""
+    """The session must be renewed: the client should log in again."""
 
     status_code = 401
     code = "session_stale"

@@ -12,8 +12,8 @@ from v2.core.errors import InferenceUnavailable
 PREDICT = "/api/v2/projects/projA/predict"
 
 
-def bootstrap(client, auth_headers, ol, services) -> dict:
-    seed(ol, "projA", files=("images/dish01/D1.png", "images/dish01/D2.png"))
+def bootstrap(client, auth_headers, harness, services) -> dict:
+    seed(harness, "projA", files=("images/dish01/D1.png", "images/dish01/D2.png"))
     headers = auth_headers(client)
     client.post("/api/v2/projects/scan", headers=headers)
     items = client.get("/api/v2/projects/projA/tasks", headers=headers).json()["items"]
@@ -35,8 +35,8 @@ def payload(anno_id: str, **extra) -> str:
     return json.dumps(body)
 
 
-def test_predict_with_an_uploaded_frame(client, auth_headers, ol, services):
-    ctx = bootstrap(client, auth_headers, ol, services)
+def test_predict_with_an_uploaded_frame(client, auth_headers, harness, services):
+    ctx = bootstrap(client, auth_headers, harness, services)
     first = ctx["items"][0]
 
     resp = client.post(
@@ -55,9 +55,9 @@ def test_predict_with_an_uploaded_frame(client, auth_headers, ol, services):
     assert job["return_type"] == 2
 
 
-def test_each_predict_sends_its_own_frame(client, auth_headers, ol, services):
+def test_each_predict_sends_its_own_frame(client, auth_headers, harness, services):
     """The v1 bug was predicting on whichever frame was loaded last."""
-    ctx = bootstrap(client, auth_headers, ol, services)
+    ctx = bootstrap(client, auth_headers, harness, services)
     first, second = ctx["items"][0], ctx["items"][1]
 
     client.post(
@@ -77,8 +77,8 @@ def test_each_predict_sends_its_own_frame(client, auth_headers, ol, services):
     assert [job["anno_id"] for job in ctx["inference"].jobs] == [first["anno_id"], second["anno_id"]]
 
 
-def test_predict_can_pull_the_frame_from_openlist(client, auth_headers, ol, services):
-    ctx = bootstrap(client, auth_headers, ol, services)
+def test_predict_can_pull_the_frame_from_storage(client, auth_headers, harness, services):
+    ctx = bootstrap(client, auth_headers, harness, services)
     resp = client.post(
         PREDICT,
         data={"data": payload(ctx["items"][0]["anno_id"], rel_path="images/dish01/D1.png")},
@@ -88,8 +88,8 @@ def test_predict_can_pull_the_frame_from_openlist(client, auth_headers, ol, serv
     assert base64.b64decode(ctx["inference"].jobs[-1]["image_b64"]) == b"png"  # the fake stores b"png"
 
 
-def test_predict_can_reuse_an_uploaded_digest(client, auth_headers, ol, services):
-    ctx = bootstrap(client, auth_headers, ol, services)
+def test_predict_can_reuse_an_uploaded_digest(client, auth_headers, harness, services):
+    ctx = bootstrap(client, auth_headers, harness, services)
     upload = client.put(
         "/api/v2/projects/projA/images/local/frame.png",
         files={"file": ("frame.png", b"cached-frame")},
@@ -106,8 +106,8 @@ def test_predict_can_reuse_an_uploaded_digest(client, auth_headers, ol, services
     assert ctx["inference"].jobs[-1]["image_sha256"] == digest
 
 
-def test_predict_errors(client, auth_headers, ol, services):
-    ctx = bootstrap(client, auth_headers, ol, services)
+def test_predict_errors(client, auth_headers, harness, services):
+    ctx = bootstrap(client, auth_headers, harness, services)
     headers = ctx["headers"]
 
     assert client.post(PREDICT, data={"data": "not json"}, headers=headers).status_code == 422
@@ -117,8 +117,8 @@ def test_predict_errors(client, auth_headers, ol, services):
     assert client.post(PREDICT, data={"data": payload(ctx["items"][0]["anno_id"])}).status_code == 401
 
 
-def test_worker_unavailable_is_503(client, auth_headers, ol, services):
-    ctx = bootstrap(client, auth_headers, ol, services)
+def test_worker_unavailable_is_503(client, auth_headers, harness, services):
+    ctx = bootstrap(client, auth_headers, harness, services)
     ctx["inference"].fail_with = InferenceUnavailable("worker down")
 
     resp = client.post(
@@ -131,9 +131,9 @@ def test_worker_unavailable_is_503(client, auth_headers, ol, services):
 
 
 # region internal pull path
-def test_predict_can_delegate_the_image_pull(client, auth_headers, ol, services):
+def test_predict_can_delegate_the_image_pull(client, auth_headers, harness, services):
     """With inline images off, the job carries a pull URL instead of the bytes."""
-    ctx = bootstrap(client, auth_headers, ol, services)
+    ctx = bootstrap(client, auth_headers, harness, services)
     services.settings.inference_inline_images = False
     anno = ctx["items"][0]["anno_id"]
 

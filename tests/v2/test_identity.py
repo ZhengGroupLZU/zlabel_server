@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from v2.adapters.identity import (
     LocalIdentity,
+    build_identity,
     hash_password,
     verify_password,
 )
@@ -39,9 +40,8 @@ def test_short_passwords_are_refused():
 # region provider contract
 
 
-
 def test_local_identity_creates_verifies_and_rejects(db):
-    identity = LocalIdentity(db, Settings(identity="local", storage_backend="local"))
+    identity = LocalIdentity(db, Settings())
     identity.create_user("Alice", "secret123", role=ROLE_REVIEWER)
     identity.create_user("root", "secret123", admin=True)
 
@@ -64,7 +64,7 @@ def test_local_identity_creates_verifies_and_rejects(db):
 
 
 def test_password_change_and_bootstrap_mode(db):
-    identity = LocalIdentity(db, Settings(identity="local", storage_backend="local"))
+    identity = LocalIdentity(db, Settings())
     identity.create_user("alice", "secret123")
     assert identity.set_password("alice", "newsecret") is True
     assert identity.verify("alice", "newsecret") is not None and identity.verify("alice", "secret123") is None
@@ -75,11 +75,9 @@ def test_password_change_and_bootstrap_mode(db):
     assert identity.set_password("nobody", "whatever") is False
 
 
-def test_local_identity_requires_local_storage():
-    from v2.adapters.identity import build_identity
-
-    with pytest.raises(ValidationFailed):
-        build_identity(Settings(identity="local", storage_backend="openlist"), db=None, storage=None)
+def test_build_identity_returns_the_local_provider(db):
+    provider = build_identity(Settings(), db=db)
+    assert isinstance(provider, LocalIdentity) and provider.kind == "local"
 
 
 # endregion

@@ -21,15 +21,10 @@ def settings(tmp_path) -> Settings:
     return Settings(
         database_url="sqlite+pysqlite:///:memory:",
         upload_dir=str(tmp_path / "uploads"),
-        storage_backend="local",
         storage_root=str(tmp_path / "storage"),
-        identity="local",
         anno_dir=".zlabel/annos",
         inference_token="internal-secret",  # shared secret (API <-> worker)
         inference_url="",
-        # deterministic tests: scanners are exercised explicitly
-        scan_on_startup=False,
-        project_scan_interval=0,
     )
 
 
@@ -44,19 +39,19 @@ def db(settings: Settings) -> Iterator[Database]:
 
 
 @pytest.fixture
-def ol(settings: Settings) -> LocalBackendHarness:
+def harness(settings: Settings) -> LocalBackendHarness:
     """Seeds the storage tree the backend under test actually reads.
 
-    Named ``ol`` for history: it replaced the in-memory OpenList fake, and keeping
-    the name left ~90% of the seeding call sites untouched.
+    The harness keeps the old in-memory fake's ``add_file``/``add_dir``/``users``
+    surface, but every write lands in ``settings.storage_root``.
     """
     return LocalBackendHarness(settings.storage_root)
 
 
 @pytest.fixture
-def services(settings: Settings, db: Database, ol: LocalBackendHarness) -> Services:
-    built = Services.build(settings, db, openlist=LocalDiskBackend(settings))
-    ol.identity = built.auth.identity
+def services(settings: Settings, db: Database, harness: LocalBackendHarness) -> Services:
+    built = Services.build(settings, db, storage=LocalDiskBackend(settings))
+    harness.identity = built.auth.identity
     built.auth.identity.create_user("rainy", "secret", admin=True)
     return built
 
@@ -86,10 +81,10 @@ def local_client(settings: Settings, db: Database, services: Services) -> Iterat
 
 
 @pytest.fixture
-def auth_headers(ol: LocalBackendHarness) -> callable:
+def auth_headers(harness: LocalBackendHarness) -> callable:
     """``login(client, name, password)`` → Authorization headers.
 
-    Accounts are created on first use (``ol.users[name] = pw`` wins, else the shared
+    Accounts are created on first use (``harness.users[name] = pw`` wins, else the shared
     test password), which is what the old fake did implicitly. ``rainy`` is the
     bootstrap admin; everybody else is an annotator.
     """
@@ -97,7 +92,7 @@ def auth_headers(ol: LocalBackendHarness) -> callable:
 
     def _login(client: TestClient, username: str = "rainy", password: str = "secret") -> dict[str, str]:
         services_: Services = client.app.state.services
-        secret = password or ol.users.get(username) or "secret"
+        secret = password or harness.users.get(username) or "secret"
         # create_user enforces a minimum length; tests happily pass short ones.
         # "rainy" is the bootstrap admin (created by the services fixture), so its
         # password is used verbatim.

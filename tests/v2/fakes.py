@@ -1,7 +1,7 @@
 """Test doubles.
 
-``LocalBackendHarness`` seeds the real local storage tree (the backend under test)
-in the shape of the old OpenList fake, so most seeding call sites stayed unchanged.
+``LocalBackendHarness`` seeds the real local storage tree (the backend under test),
+so tests drive the production storage code instead of a simulation.
 """
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ import numpy as np
 class LocalBackendHarness:
     """Seeds the **real** local storage root and registers test accounts.
 
-    Kept in the shape of the old OpenList fake (``add_file``/``add_dir``/``files``/
-    ``users``) so the suite drives the backend under test instead of a simulation:
-    every write lands in ``settings.storage_root``.
+    Tests spell paths with a stable absolute prefix (``VIRTUAL_ROOT``) that is
+    stripped before touching ``settings.storage_root``; the server itself always
+    works with paths relative to the storage root.
     """
 
-    VIRTUAL_ROOT = "/zlabel_server/projects"  # the layout the tests spell their paths in
+    VIRTUAL_ROOT = "/zlabel_server/projects"  # the prefix tests spell their paths with
 
     def __init__(self, root: Path | str) -> None:
         self.root = Path(root)
@@ -31,7 +31,7 @@ class LocalBackendHarness:
         self.identity = None  # set by the services fixture (local identity)
 
     def disk_path(self, path: str) -> Path:
-        """Map a test-facing (OpenList style, absolute) path onto the storage root."""
+        """Map a test-facing absolute path onto the storage root."""
         clean = str(path).replace("\\", "/")
         if clean.startswith(self.VIRTUAL_ROOT):
             clean = clean[len(self.VIRTUAL_ROOT) :]
@@ -81,9 +81,9 @@ class _UsersMap(dict):
 class _FileMap:
     """A live view of the harness tree.
 
-    Keys are the virtual (OpenList style, absolute) paths the tests spell; values are
-    read from disk, so the assertions keep working on paths the *server* produced
-    (which are relative to the storage root).
+    Keys are the absolute paths the tests spell; values are read from disk, so the
+    assertions keep working on paths the *server* produced (which are relative to
+    the storage root).
     """
 
     def __init__(self, harness: LocalBackendHarness) -> None:
@@ -139,6 +139,7 @@ class _FileMap:
 
     def __repr__(self) -> str:
         return f"_FileMap({self.keys()!r})"
+
 
 class FakeInference:
     """Stand-in for the inference worker (records jobs, returns a SamReturn)."""

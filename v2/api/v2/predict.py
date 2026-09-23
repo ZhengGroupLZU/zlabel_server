@@ -36,15 +36,15 @@ def _parse_job(data: str) -> dict[str, Any]:
     return payload
 
 
-def _resolve_image(payload: dict, upload: UploadFile | None, auth: AuthContext, services: Services) -> bytes:
-    """Uploaded bytes win, then the OpenList frame, then the upload cache."""
+def _resolve_image(payload: dict, upload: UploadFile | None, services: Services) -> bytes:
+    """Uploaded bytes win, then the stored frame, then the upload cache."""
     if upload is not None:
         return upload.file.read()
     rel_path = str(payload.get("rel_path") or "").strip()
     if rel_path:
         project = str(payload["project"])
-        path = services.openlist.image_path(project, rel_path)
-        return services.openlist.get_bytes(path, auth.oplist_token)
+        path = services.storage.image_path(project, rel_path)
+        return services.storage.get_bytes(path)
     digest = str(payload.get("image_sha256") or "").strip()
     if digest:
         return services.images.get(digest)
@@ -56,7 +56,7 @@ async def predict(
     project: str,
     data: str = Form(...),
     image: UploadFile | None = File(None),
-    auth: AuthContext = Depends(get_auth),
+    _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> dict[str, Any]:
     services.projects.get_project(project)
@@ -65,7 +65,7 @@ async def predict(
     if task.project != project:
         raise ValidationFailed(f"task {payload['anno_id']} does not belong to project {project}")
 
-    content = _resolve_image({**payload, "project": project}, image, auth, services)
+    content = _resolve_image({**payload, "project": project}, image, services)
     digest = sha256_bytes(content)
     inline = services.settings.inference_inline_images
     image_url = None

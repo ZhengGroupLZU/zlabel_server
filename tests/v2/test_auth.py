@@ -69,16 +69,16 @@ def test_disabled_user_is_rejected(client, auth_headers, db, app):
     assert client.get(ME, headers=headers).status_code == 401
 
 
-def test_second_user_gets_the_annotator_role(client, auth_headers, ol):
+def test_second_user_gets_the_annotator_role(client, auth_headers, harness):
     auth_headers(client, "rainy")  # first login creates the admin
-    ol.users["bob"] = "pw"
+    harness.users["bob"] = "pw"
     headers = auth_headers(client, "bob", "pw")
     assert client.get(ME, headers=headers).json()["role"] == ROLE_ANNOTATOR
 
 
-def test_user_admin_endpoints_are_admin_only(client, auth_headers, ol):
+def test_user_admin_endpoints_are_admin_only(client, auth_headers, harness):
     admin = auth_headers(client, "rainy")
-    ol.users["bob"] = "pw"
+    harness.users["bob"] = "pw"
     bob = auth_headers(client, "bob", "pw")
 
     assert client.get("/api/v2/auth/users", headers=bob).status_code == 403
@@ -90,6 +90,24 @@ def test_user_admin_endpoints_are_admin_only(client, auth_headers, ol):
     assert promoted.status_code == 200 and promoted.json()["role"] == ROLE_REVIEWER
     # the role change revokes the old session
     assert client.get(ME, headers=bob).status_code == 401
+
+
+def test_login_adopts_a_legacy_identity_id(client, auth_headers, db):
+    """Rows from the pre-P6 database keep their role and stats.
+
+    Their ``identity_id`` is re-pointed at ``local:<id>`` on the next login (the
+    lookup falls back to the name), so an upgrade does not create a second account.
+    """
+    headers = auth_headers(client)
+    assert client.get(ME, headers=headers).status_code == 200
+    with db.session_scope() as session:
+        user = session.scalar(select(User))
+        user.identity_id = "3"  # a legacy, upstream-style value
+    login = client.post(LOGIN, json={"username": "rainy", "password": "secret"})
+    assert login.status_code == 200
+    with db.session_scope() as session:
+        user = session.scalar(select(User))
+        assert user.identity_id == f"local:{user.id}" and user.name == "rainy"
 
 
 def test_unknown_role_is_rejected(client, auth_headers):

@@ -2,8 +2,8 @@
 
 Fresh database: v2 does not migrate or import v1 data. ``tasks.anno_id`` keeps the
 formula shared with the desktop client — ``md5("<project>/<project-relative posix
-path>")`` — and annotation *files* still live in OpenList, so history stored on
-disk stays interchangeable.
+path>")`` — while the annotation *files* live in the storage tree, so history
+stored on disk stays interchangeable with the desktop's own datasets.
 """
 
 from __future__ import annotations
@@ -62,12 +62,14 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    oplist_user_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    #: ``"<provider>:<subject>"`` — today always ``local:<name>``. Kept as its own
+    #: column so a future SSO provider can map external subjects onto one account.
+    identity_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)  # lower-cased
     email: Mapped[str] = mapped_column(String(256), default="")
     role: Mapped[str] = mapped_column(String(16), default=ROLE_ANNOTATOR)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    # scrypt hash for local accounts ("" while OpenList still owns the identity)
+    #: scrypt hash (``""`` for an account that cannot log in with a password yet)
     password_hash: Mapped[str] = mapped_column(String(255), default="")
     finished_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -83,14 +85,13 @@ class User(Base):
 
 
 class Session(Base):
-    """A server-issued session; the OpenList token lives here for file access."""
+    """A server-issued session (the client sends its opaque token as a Bearer)."""
 
     __tablename__ = "sessions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    oplist_token: Mapped[str] = mapped_column(String(512), default="")
     client_info: Mapped[str] = mapped_column(String(128), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
@@ -104,8 +105,17 @@ class Project(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    #: Stable project id (the dataset's ``project.json`` "id"), the namespace of
+    #: every ``anno_id``: ``sha256("<key>/<rel path>")``. Renaming the directory
+    #: does not change it.
+    key: Mapped[str] = mapped_column(String(64), unique=True, index=True, default="")
     display_name: Mapped[str] = mapped_column(String(255), default="")
     description: Mapped[str] = mapped_column(Text, default="")
+    #: whether the project's frames form sequences. When on, the scanner parses
+    #: ``group_name``/``day`` from the relative path (``species/dish/D{n}.png``);
+    #: when off they stay empty (``""/0``) because the naming is not a timeline.
+    #: Toggle it in the admin UI; changing it recomputes the existing tasks.
+    timeline: Mapped[bool] = mapped_column(Boolean, default=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -139,7 +149,7 @@ class Task(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     anno_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    # ``path`` is the absolute OpenList path, ``rel_path`` the project-relative one
+    # ``path`` is the storage-root path, ``rel_path`` the project-relative one
     path: Mapped[str] = mapped_column(String(1024))
     rel_path: Mapped[str] = mapped_column(String(1024), default="")
     group_name: Mapped[str] = mapped_column(String(512), default="")
@@ -167,7 +177,7 @@ class Task(Base):
 
 
 class Annotation(Base):
-    """Metadata of the annotation currently stored in OpenList for a task."""
+    """Metadata of the annotation file currently stored for a task."""
 
     __tablename__ = "annotations"
 
@@ -237,3 +247,55 @@ class ProjectMember(Base):
 
     project: Mapped[Project] = relationship(lazy="joined")
     user: Mapped[User] = relationship(lazy="joined")
+
+
+class Instance(Base):
+    """A tracked object (a seed, a seedling, ...) inside one project.
+
+    ``number`` is the id the annotation documents use
+    (``Result.instance_id`` / ``Annotation.instances[number]``): unique per project,
+    **never renumbered here** because documents reference it. Rows are created by
+    annotation saves (mirrored from the document, like labels) and can be edited in
+    the admin UI (status/name/note/colour/archived); ``instance_results`` records
+    which annotations belong to the instance.
+    """
+
+    __tablename__ = "instances"
+    __table_args__ = (UniqueConstraint("project_id", "number", name="uq_instance_project_number"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    #: germination status (the document's ``Annotation.instances[number]``); the
+    #: mirror fills it when the row is created, the admin can change it afterwards
+    status: Mapped[str] = mapped_column(String(64), default="")
+    color: Mapped[str] = mapped_column(String(16), default="#000000")
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    project: Mapped[Project] = relationship(lazy="joined")
+
+
+class InstanceResult(Base):
+    """One annotation (a ``Result`` of a document) that belongs to an instance.
+
+    A result belongs to at most one instance; the rows are rewritten by the mirror
+    on every annotation save, so the table always reflects the stored documents.
+    """
+
+    __tablename__ = "instance_results"
+    __table_args__ = (UniqueConstraint("task_id", "result_id", name="uq_instance_result_task_result"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id", ondelete="CASCADE"), index=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
+    result_id: Mapped[str] = mapped_column(String(64))
+    #: the result's first label name (e.g. ``Seed``/``Root``) for display/statistics
+    label: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    instance: Mapped[Instance] = relationship(lazy="joined")
+    task: Mapped[Task] = relationship(lazy="joined")

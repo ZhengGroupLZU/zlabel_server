@@ -1,8 +1,11 @@
 """``/api/v2/admin`` — deployment administration (P5).
 
 Everything here needs the global ``admin`` role. The Web UI (or the CLI, or curl)
-uses these endpoints to manage accounts, look at storage and — when the server owns
-the tree — browse/move files.
+uses these endpoints to manage accounts, look at storage and browse/move files.
+
+Account operations are delegated to :class:`~v2.services.auth_service.AuthService`
+so the REST path, the CLI and the admin UI share the same audit rows and the same
+session revocation rules.
 """
 
 from __future__ import annotations
@@ -25,37 +28,22 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 AdminAuth = Depends(require_roles("admin"))
 
 
-def _local_storage(services: Services):
-    """The local backend, or a clear error for a backend that manages itself."""
-    storage = services.openlist
-    if getattr(storage, "kind", "") != "local":
-        raise ValidationFailed(
-            f"the {getattr(storage, 'kind', 'unknown')!r} backend owns its own file management"
-        )
-    return storage
-
-
 # region users
 @router.post("/users", response_model=UserOut, status_code=201)
 def create_user(
     payload: dict[str, Any],
-    _auth: AuthContext = AdminAuth,
+    auth: AuthContext = AdminAuth,
     services: Services = Depends(get_services),
 ) -> UserOut:
-    """Create an account (only with the local identity provider)."""
-    identity = services.auth.identity
-    if getattr(identity, "kind", "") != "local":
-        raise ValidationFailed("accounts live in the external identity provider; create them there")
-    name = str(payload.get("name") or "").strip()
-    password = str(payload.get("password") or "")
-    role = str(payload.get("role") or "annotator")
-    created = identity.create_user(
-        name, password, role=role, email=str(payload.get("email") or ""), admin=role == "admin"
+    """Create an account."""
+    user = services.auth.create_user(
+        str(payload.get("name") or "").strip(),
+        str(payload.get("password") or ""),
+        role=str(payload.get("role") or "annotator"),
+        email=str(payload.get("email") or ""),
+        actor_id=auth.user_id,
     )
-    with services.db.session_scope() as session:
-        from v2.db.models import User
-
-        return UserOut.of(session.get(User, created["id"]))
+    return UserOut.of(user)
 
 
 @router.patch("/users/{user_id}", response_model=UserOut)
@@ -65,50 +53,29 @@ def update_user(
     auth: AuthContext = AdminAuth,
     services: Services = Depends(get_services),
 ) -> UserOut:
-    """Change a role (sessions are revoked) and/or enable/disable an account."""
-    from sqlalchemy import select
-
-    from v2.db.models import User
-
+    """Change a role and/or enable/disable an account (both revoke its sessions)."""
     role = payload.get("role")
-    if role is not None:
-        services.auth.set_role(auth, user_id, str(role))
-    if "active" in payload:
-        with services.db.session_scope() as session:
-            user = session.get(User, user_id)
-            if user is None:
-                raise ValidationFailed(f"unknown user: {user_id}")
-            user.active = bool(payload["active"])
-            if not user.active:
-                services.auth.revoke_all(user_id)
-    with services.db.session_scope() as session:
-        user = session.scalar(select(User).where(User.id == user_id))
-        if user is None:
-            raise ValidationFailed(f"unknown user: {user_id}")
-        return UserOut.of(user)
+    active = payload.get("active")
+    if role is None and active is None:
+        raise ValidationFailed("nothing to update: send 'role' and/or 'active'")
+    user = services.auth.update_user(
+        user_id,
+        role=str(role) if role is not None else None,
+        active=bool(active) if active is not None else None,
+        actor_id=auth.user_id,
+    )
+    return UserOut.of(user)
 
 
 @router.post("/users/{user_id}/password", status_code=204)
 def set_password(
     user_id: int,
     payload: dict[str, Any],
-    _auth: AuthContext = AdminAuth,
+    auth: AuthContext = AdminAuth,
     services: Services = Depends(get_services),
 ) -> Response:
-    """Set a password (local identity only)."""
-    identity = services.auth.identity
-    if getattr(identity, "kind", "") != "local":
-        raise ValidationFailed("accounts live in the external identity provider; change it there")
-    from v2.db.models import User
-
-    with services.db.session_scope() as session:
-        user = session.get(User, user_id)
-        if user is None:
-            raise ValidationFailed(f"unknown user: {user_id}")
-        name = user.name
-    if not identity.set_password(name, str(payload.get("password") or "")):
-        raise ValidationFailed(f"cannot set the password of {name!r}")
-    services.auth.revoke_all(user_id)  # force a fresh login
+    """Set a password (revokes the account's sessions, forcing a fresh login)."""
+    services.auth.set_password(user_id, str(payload.get("password") or ""), actor_id=auth.user_id)
     return Response(status_code=204)
 
 
@@ -120,14 +87,11 @@ def set_password(
 def storage_info(
     _auth: AuthContext = AdminAuth, services: Services = Depends(get_services)
 ) -> dict[str, Any]:
-    """Which backend stores the data, and how much is there."""
-    storage = services.openlist
-    info: dict[str, Any] = {"backend": getattr(storage, "kind", "unknown"), "root": storage.root}
-    if hasattr(storage, "usage"):
-        info.update(storage.usage())
-        info["path"] = str(storage.root_dir)
-    else:
-        info["hint"] = "the external backend reports its own usage"
+    """Where the data lives and how much of it there is."""
+    storage = services.storage
+    info: dict[str, Any] = {"backend": storage.kind, "root": storage.root}
+    info.update(storage.usage())
+    info["path"] = str(storage.root_dir)
     return info
 
 
@@ -137,15 +101,15 @@ def list_files(
     _auth: AuthContext = AdminAuth,
     services: Services = Depends(get_services),
 ) -> dict[str, Any]:
-    """One directory: sub-directories and files (local backend only)."""
-    storage = _local_storage(services)
+    """One directory: sub-directories and files."""
+    storage = services.storage
     entries = []
-    for name in storage.list_dirs(path, ""):
+    for name in storage.list_dirs(path):
         entries.append({"name": name, "type": "dir"})
-    for full in storage.glob_files(path, ""):
+    for full in storage.glob_files(path):
         parent, _, name = full.rpartition("/")
         if parent == path.rstrip("/"):
-            info = storage.file_info(full, "")
+            info = storage.file_info(full)
             entries.append({"name": name, "type": "file", "size": info.size, "modified": info.modified})
     return {"path": path, "entries": sorted(entries, key=lambda e: (e["type"] != "dir", e["name"]))}
 
@@ -158,11 +122,10 @@ async def upload_file(
     services: Services = Depends(get_services),
 ) -> dict[str, Any]:
     """Store a file at ``path`` (the Web UI's upload)."""
-    storage = _local_storage(services)
     content = await file.read()
     if len(content) > services.settings.max_upload_bytes:
         raise PayloadTooLarge(f"file exceeds {services.settings.max_upload_bytes} bytes")
-    storage.put_bytes(path, content, "")
+    services.storage.put_bytes(path, content)
     return {"path": path, "size": len(content)}
 
 
@@ -172,8 +135,7 @@ def download_file(
     _auth: AuthContext = AdminAuth,
     services: Services = Depends(get_services),
 ) -> Response:
-    storage = _local_storage(services)
-    content = storage.get_bytes(path, "")
+    content = services.storage.get_bytes(path)
     return Response(content=content, media_type="application/octet-stream")
 
 
@@ -183,7 +145,7 @@ def delete_file(
     _auth: AuthContext = AdminAuth,
     services: Services = Depends(get_services),
 ) -> Response:
-    _local_storage(services).delete(path)
+    services.storage.delete(path)
     return Response(status_code=204)
 
 
@@ -193,7 +155,7 @@ def make_directory(
     _auth: AuthContext = AdminAuth,
     services: Services = Depends(get_services),
 ) -> Response:
-    _local_storage(services).ensure_dir(path, "")
+    services.storage.ensure_dir(path)
     return Response(status_code=204)
 
 
@@ -205,7 +167,7 @@ def move_file(
     services: Services = Depends(get_services),
 ) -> Response:
     """Move/rename inside the storage root (same volume, atomic)."""
-    storage = _local_storage(services)
+    storage = services.storage
     src = storage.disk_path(source)
     if not src.exists():
         raise ValidationFailed(f"not found: {source}")

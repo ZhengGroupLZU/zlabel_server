@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
 from v2.api.deps import get_auth, get_services, require_roles
 from v2.core.errors import ApiError
@@ -39,7 +39,9 @@ def create_project(
     auth: AuthContext = Depends(require_roles("reviewer", "admin")),  # no project yet to scope to
     services: Services = Depends(get_services),
 ) -> ProjectOut:
-    project = services.projects.create_project(payload.name, payload.display_name, actor_id=auth.user_id)
+    project = services.projects.create_project(
+        payload.name, payload.display_name, timeline=payload.timeline, actor_id=auth.user_id
+    )
     return ProjectOut.of(project)
 
 
@@ -66,9 +68,22 @@ def update_project(
         display_name=payload.display_name,
         description=payload.description,
         active=payload.active,
+        timeline=payload.timeline,
         actor_id=auth.user_id,
     )
     return ProjectOut.of(updated, services.projects.progress(project))
+
+
+@router.delete("/{project}", status_code=204)
+def delete_project(
+    project: str,
+    delete_files: bool = Query(True, description="also delete the project directory on disk"),
+    auth: AuthContext = Depends(require_roles("admin")),
+    services: Services = Depends(get_services),
+) -> Response:
+    """Delete a project (admin only, irreversible): rows + files by default."""
+    services.projects.delete_project(project, delete_files=delete_files, actor_id=auth.user_id)
+    return Response(status_code=204)
 
 
 @router.post("/scan", response_model=ScanStats)
@@ -77,18 +92,18 @@ def scan_all(
     _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> ScanStats:
-    """Re-walk OpenList into the task table (the client's "Scan"/Fetch button)."""
+    """Re-walk the storage tree into the task table (the client's "Scan"/Fetch button)."""
     return ScanStats(**services.projects.scan_and_sync(force=force))
 
 
 @router.post("/{project}/scan", response_model=ScanStats)
 def scan_project(
-    project: str,  # noqa: ARG001 - the OpenList walk is global per root
+    project: str,  # noqa: ARG001 - the storage walk is global per root
     force: bool = Query(True),
     _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> ScanStats:
-    """Same as ``POST /projects/scan``: the OpenList walk is global per root.
+    """Same as ``POST /projects/scan``: the storage walk is global per root.
 
     Needs a reviewer for this project - or, when the project is not known yet
     (discovering brand-new storage directories), a global reviewer.

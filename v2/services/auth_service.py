@@ -1,9 +1,10 @@
-"""Login, sessions and role checks.
+"""Login, sessions, accounts and role checks.
 
-OpenList stays the identity source: credentials are verified there, the user's
-OpenList token is kept *inside* the server session (so file access keeps that
-user's own ACLs) and the client receives our own opaque session token. Passwords
-are never stored.
+Credentials are verified by the identity provider (``LocalIdentity`` checks our own
+scrypt hashes) and the client receives our own opaque session token; only its
+sha256 is stored. The admin-facing account operations (create / role / enabled /
+password) live here too, so every path — REST, CLI and the web admin UI — writes
+the same audit row and revokes sessions the same way.
 """
 
 from __future__ import annotations
@@ -13,12 +14,13 @@ import secrets
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from typing import Any
 
 from sqlalchemy import func, select
 
 from v2.adapters.identity import IdentityProvider
 from v2.core.config import Settings
-from v2.core.errors import Forbidden, Unauthorized
+from v2.core.errors import Forbidden, NotFound, Unauthorized, ValidationFailed
 from v2.core.logging import get_logger
 from v2.db.base import Database
 from v2.db.models import ROLE_ADMIN, ROLE_ANNOTATOR, ROLES, Session, User, utcnow
@@ -35,13 +37,12 @@ def hash_token(token: str) -> str:
 
 @dataclass(frozen=True)
 class AuthContext:
-    """A resolved session: who is calling and which OpenList token to use."""
+    """A resolved session: who is calling and what they may do."""
 
     session_id: int
     user_id: int
     name: str
     role: str
-    oplist_token: str
     expires_at: datetime
 
     @property
@@ -119,16 +120,10 @@ class AuthService:
 
     # region login / logout
     def login(self, username: str, password: str, client_info: str = "") -> tuple[str, AuthContext, datetime]:
-        """Verify through the identity provider, upsert the user, issue a session.
-
-        ``LocalIdentity`` checks our own scrypt hash; ``OpenListIdentity`` proxies
-        the external service and hands back the user's token (kept in the session
-        so per-user file ACLs still work while OpenList is in use).
-        """
+        """Verify through the identity provider, upsert the user, issue a session."""
         remote = self.identity.verify(username, password)
         if remote is None:
             raise Unauthorized("the server rejected these credentials")
-        oplist_token = str(remote.get("token") or "")
         name = (remote.get("name") or username).strip()
 
         with self.db.session_scope() as session:
@@ -140,7 +135,6 @@ class AuthService:
             row = Session(
                 token_hash=hash_token(token),
                 user_id=user.id,
-                oplist_token=oplist_token,
                 client_info=client_info[:128],
                 expires_at=expires_at,
             )
@@ -199,31 +193,108 @@ class AuthService:
     # endregion
 
     # region users / roles
+    def list_users(self) -> list[User]:
+        with self.db.session_scope() as session:
+            return list(session.scalars(select(User).order_by(User.name)).all())
+
+    def get_user(self, user_id: int) -> User:
+        with self.db.session_scope() as session:
+            user = session.get(User, user_id)
+            if user is None:
+                raise NotFound(f"unknown user: {user_id}")
+            return user
+
+    def find_user(self, name: str) -> User | None:
+        """Look an account up by (case-insensitive) name."""
+        with self.db.session_scope() as session:
+            return session.scalar(select(User).where(func.lower(User.name) == (name or "").strip().lower()))
+
+    def create_user(
+        self,
+        name: str,
+        password: str,
+        *,
+        role: str = ROLE_ANNOTATOR,
+        email: str = "",
+        actor_id: int | None = None,
+    ) -> User:
+        """Create an account and audit it (REST, CLI and the admin UI)."""
+        created = self.identity.create_user(name, password, role=role, email=email, admin=role == ROLE_ADMIN)
+        with self.db.session_scope() as session:
+            user = session.get(User, created["id"])
+            audit.record(
+                session,
+                action="create_user",
+                user_id=actor_id,
+                target_type="user",
+                target_id=created["id"],
+                detail={"name": user.name, "role": user.role},
+            )
+            return user
+
+    def update_user(
+        self,
+        user_id: int,
+        *,
+        role: str | None = None,
+        active: bool | None = None,
+        actor_id: int | None = None,
+    ) -> User:
+        """Change a role and/or enable a disable an account.
+
+        A role change — or disabling the account — revokes every session right
+        away, so a demoted or locked-out user cannot keep working on the cached
+        context (the session cache would otherwise serve it for up to a minute).
+        """
+        if role is not None and role not in ROLES:
+            raise ValidationFailed(f"unknown role: {role}")
+        changes: dict[str, Any] = {}
+        with self.db.session_scope() as session:
+            user = session.get(User, user_id)
+            if user is None:
+                raise NotFound(f"unknown user: {user_id}")
+            if role is not None and user.role != role:
+                user.role = role
+                changes["role"] = role
+            if active is not None and bool(active) != user.active:
+                user.active = bool(active)
+                changes["active"] = bool(active)
+            if changes:
+                audit.record(
+                    session,
+                    action="update_user",
+                    user_id=actor_id,
+                    target_type="user",
+                    target_id=user.id,
+                    detail=changes,
+                )
+        if changes:
+            self.revoke_all(user_id)
+            self.cache.clear()
+        return self.get_user(user_id)
+
     def set_role(self, actor: AuthContext, user_id: int, role: str) -> User:
         """Admin-only role change; revokes the target's sessions."""
         actor.require_admin()
         if role not in ROLES:
             raise Forbidden(f"unknown role: {role}")
-        with self.db.session_scope() as session:
-            user = session.get(User, user_id)
-            if user is None:
-                raise Unauthorized(f"unknown user: {user_id}")
-            user.role = role
-            audit.record(
-                session,
-                action="set_role",
-                user_id=actor.user_id,
-                target_type="user",
-                target_id=user.id,
-                detail={"role": role},
-            )
+        return self.update_user(user_id, role=role, actor_id=actor.user_id)
+
+    def set_password(self, user_id: int, password: str, *, actor_id: int | None = None) -> None:
+        """Replace a password and force a fresh login (REST and the admin UI)."""
+        user = self.get_user(user_id)
+        if not self.identity.set_password(user.name, password):
+            raise NotFound(f"cannot set the password of {user.name!r}")
         self.revoke_all(user_id)
         self.cache.clear()
-        return user
-
-    def list_users(self) -> list[User]:
         with self.db.session_scope() as session:
-            return list(session.scalars(select(User).order_by(User.name)).all())
+            audit.record(
+                session,
+                action="set_password",
+                user_id=actor_id,
+                target_type="user",
+                target_id=user_id,
+            )
 
     # endregion
 
@@ -231,21 +302,21 @@ class AuthService:
     def _upsert_user(self, session, remote: dict, name: str) -> User:
         """Find or create the local row for the authenticated account.
 
-        ``oplist_user_id`` holds ``"<provider>:<subject>"`` (the column name is kept
-        for compatibility with existing databases).
+        ``identity_id`` holds ``"<provider>:<subject>"``; the provider only invents
+        a subject for accounts it authenticated but has not seen before.
         """
         subject = str(remote.get("id") or name.lower())
-        oplist_user_id = subject if ":" in subject else f"{self.identity.kind}:{subject}"
+        identity_id = subject if ":" in subject else f"{self.identity.kind}:{subject}"
         user = None
-        if oplist_user_id:
-            user = session.scalar(select(User).where(User.oplist_user_id == oplist_user_id))
+        if identity_id:
+            user = session.scalar(select(User).where(User.identity_id == identity_id))
         if user is None:
             user = session.scalar(select(User).where(func.lower(User.name) == name.lower()))
         if user is None:
             is_first = session.scalar(select(func.count()).select_from(User)) == 0
             role = ROLE_ADMIN if (is_first or self._is_bootstrap_admin(name)) else ROLE_ANNOTATOR
             user = User(
-                oplist_user_id=oplist_user_id,
+                identity_id=identity_id,
                 name=name.lower(),
                 email=remote.get("email") or "",
                 role=role,
@@ -254,7 +325,7 @@ class AuthService:
             session.flush()
             logger.info(f"created user {user.name!r} with role {role}")
         else:
-            user.oplist_user_id = oplist_user_id or user.oplist_user_id
+            user.identity_id = identity_id or user.identity_id
             user.email = remote.get("email") or user.email
             if self._is_bootstrap_admin(user.name) and user.role != ROLE_ADMIN:
                 user.role = ROLE_ADMIN
@@ -271,7 +342,6 @@ class AuthService:
             user_id=user.id,
             name=user.name,
             role=user.role,
-            oplist_token=row.oplist_token,
             expires_at=expires_at,
         )
 

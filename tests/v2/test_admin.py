@@ -139,7 +139,7 @@ def test_storage_usage_and_file_browsing(local_client, local_settings, auth_head
     assert usage["files"] == 0 and usage["bytes"] == 0
 
 
-def test_file_admin_refuses_escape_and_foreign_backend(local_client, auth_headers, monkeypatch):
+def test_file_admin_refuses_path_escapes(local_client, auth_headers):
     admin = auth_headers(local_client)
     assert local_client.get(f"{ADMIN}/files", params={"path": "/../etc"}, headers=admin).status_code == 422
     assert (
@@ -148,21 +148,10 @@ def test_file_admin_refuses_escape_and_foreign_backend(local_client, auth_header
         ).status_code
         == 422
     )
-
-    # a backend that manages its own files answers with a clear message
-    from v2.core.errors import ValidationFailed
-
-    class _External:
-        kind = "openlist"
-        root = "/zlabel_server/projects"
-
-    monkeypatch.setattr(local_client.app.state.services, "openlist", _External())
-    assert local_client.get(f"{ADMIN}/files", headers=admin).status_code == 422
     assert (
-        "owns its own file management" in local_client.get(f"{ADMIN}/files", headers=admin).json()["message"]
+        local_client.post(f"{ADMIN}/files/mkdir", params={"path": "/../escape"}, headers=admin).status_code
+        == 422
     )
-    assert local_client.get(f"{ADMIN}/storage", headers=admin).json()["hint"]
-    assert ValidationFailed is not None
 
 
 def test_upload_size_limit(local_client, auth_headers):

@@ -16,12 +16,28 @@ from starlette_admin.auth import AdminUser, AuthProvider, LoginFailed
 
 from v2.core.errors import ApiError
 from v2.core.logging import get_logger
+from v2.services.auth_service import AuthContext
 from v2.services.container import Services
 
 logger = get_logger("zlabel.v2.admin")
 
 COOKIE_NAME = "zl_admin"
 COOKIE_MAX_AGE = 12 * 3600  # the session itself lives longer; the cookie is a work day
+
+
+def admin_context(services: Services, request: Request) -> AuthContext | None:
+    """The logged-in admin's context, for views that write through the services.
+
+    The admin UI carries the same session token as the API, only in a cookie; the
+    write hooks resolve it so audit rows name the admin who clicked the button.
+    """
+    token = str(request.cookies.get(COOKIE_NAME) or "")
+    if not token:
+        return None
+    try:
+        return services.auth.resolve(token)
+    except ApiError:
+        return None
 
 
 class ZLabelAuthProvider(AuthProvider):

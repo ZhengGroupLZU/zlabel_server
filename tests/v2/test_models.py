@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from v2.contracts.ids import anno_id_for
@@ -12,17 +13,29 @@ from v2.db import models as m
 
 
 def test_anno_id_matches_the_desktop_formula():
-    # the desktop computes md5("<project>/<relative posix path>")
-    assert anno_id_for("projA", "images/dish/D1.png") == hashlib.md5(b"projA/images/dish/D1.png").hexdigest()
+    # both sides compute sha256("<project key>/<relative posix path>")
+    assert (
+        anno_id_for("projKey", "images/dish/D1.png")
+        == hashlib.sha256(b"projKey/images/dish/D1.png").hexdigest()
+    )
 
 
 def test_anno_id_normalises_windows_separators():
-    assert anno_id_for("projA", r"images\dish\D1.png") == anno_id_for("projA", "images/dish/D1.png")
+    assert anno_id_for("projKey", r"images\dish\D1.png") == anno_id_for("projKey", "images/dish/D1.png")
+
+
+def test_legacy_anno_id_is_the_pre_key_formula():
+    from v2.contracts.ids import legacy_anno_id_for
+
+    assert (
+        legacy_anno_id_for("projA", "images/dish/D1.png")
+        == hashlib.md5(b"projA/images/dish/D1.png").hexdigest()
+    )
 
 
 def _project(db, name: str = "projA") -> m.Project:
     with db.session_scope() as session:
-        project = m.Project(name=name)
+        project = m.Project(name=name, key=f"key-{name}")
         session.add(project)
         session.flush()
         return project
@@ -33,7 +46,7 @@ def test_task_defaults_and_relations(db):
     with db.session_scope() as session:
         task = m.Task(
             project_id=project.id,
-            anno_id=anno_id_for("projA", "images/a/D1.png"),
+            anno_id=anno_id_for("key-projA", "images/a/D1.png"),
             path="/zlabel_server/projects/projA/images/a/D1.png",
             rel_path="images/a/D1.png",
             group_name="images/a",
@@ -59,6 +72,51 @@ def test_anno_id_is_unique(db):
             session.add(m.Task(project_id=project.id, anno_id="dup", path="p2", rel_path="r2"))
 
 
+def test_sqlite_foreign_keys_are_enforced(db):
+    """``Database`` turns the SQLite ``foreign_keys`` pragma on.
+
+    Without it every ``ondelete="CASCADE"/"SET NULL"`` in the models is a no-op
+    and a delete leaves orphan rows behind.
+    """
+    with db.session_scope() as session:
+        project = m.Project(name="projA", key="k1")
+        session.add(project)
+        session.flush()
+        task = m.Task(project_id=project.id, anno_id="a" * 64, path="p", rel_path="r")
+        session.add(task)
+        session.flush()
+        project_id, task_id = project.id, task.id
+
+    # a dangling foreign key is refused instead of silently stored
+    with pytest.raises(IntegrityError):
+        with db.session_scope() as session:
+            session.add(m.Task(project_id=999_999, anno_id="b" * 64, path="p", rel_path="r2"))
+
+    # deleting the parent cascades to the child
+    with db.session_scope() as session:
+        session.delete(session.get(m.Project, project_id))
+    with db.session_scope() as session:
+        assert session.get(m.Task, task_id) is None
+
+
+def test_deleting_a_label_removes_its_task_links(db):
+    """The task↔label link rows are cascaded by the database (previously orphaned)."""
+    with db.session_scope() as session:
+        project = m.Project(name="projA", key="k1")
+        session.add(project)
+        session.flush()
+        task = m.Task(project_id=project.id, anno_id="a" * 64, path="p", rel_path="r")
+        label = m.Label(project_id=project.id, name="Root")
+        session.add_all([task, label])
+        session.flush()
+        task.labels.append(label)
+        label_id = label.id
+    with db.session_scope() as session:
+        session.delete(session.get(m.Label, label_id))
+    with db.session_scope() as session:
+        assert session.execute(select(m.link_task_label)).all() == []
+
+
 def test_label_unique_per_project_and_task_link(db):
     project = _project(db)
     other = _project(db, "projB")
@@ -80,7 +138,7 @@ def test_label_unique_per_project_and_task_link(db):
 def test_claim_fields_persist(db):
     project = _project(db)
     with db.session_scope() as session:
-        user = m.User(oplist_user_id="7", name="rainy", role=m.ROLE_REVIEWER)
+        user = m.User(identity_id="7", name="rainy", role=m.ROLE_REVIEWER)
         session.add(user)
         session.flush()
         task = m.Task(project_id=project.id, anno_id="a2", path="p", rel_path="r")

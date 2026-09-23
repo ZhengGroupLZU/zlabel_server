@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from fastapi import Request
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -21,10 +21,27 @@ class Base(DeclarativeBase):
     pass
 
 
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+    """Turn SQLite's foreign-key enforcement on for a connection.
+
+    SQLite ships with the ``foreign_keys`` pragma **off**, which silently turns
+    every ``ondelete="CASCADE"``/``"SET NULL"`` in the models into a no-op (and
+    leaves orphan rows behind a delete). Alembic builds its own engine and keeps
+    the pragma off on purpose: batch migrations recreate tables and enforced
+    constraints would get in the way.
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cursor.close()
+
+
 class Database:
     def __init__(self, url: str, *, echo: bool = False) -> None:
         kwargs: dict = {"echo": echo, "future": True}
-        if url.startswith("sqlite"):
+        is_sqlite = url.startswith("sqlite")
+        if is_sqlite:
             # TestClient / worker threads share one connection.
             kwargs["connect_args"] = {"check_same_thread": False}
             if ":memory:" in url:
@@ -32,6 +49,8 @@ class Database:
                 kwargs["poolclass"] = StaticPool
         self.url = url
         self.engine: Engine = create_engine(url, **kwargs)
+        if is_sqlite:
+            event.listen(self.engine, "connect", _enable_sqlite_foreign_keys)
         self.session_maker = sessionmaker(self.engine, expire_on_commit=False)
 
     @contextmanager

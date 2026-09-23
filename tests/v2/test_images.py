@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from tests.v2.fakes import LocalBackendHarness
 from tests.v2.test_projects import seed
 
 ROOT = "/zlabel_server/projects"
 
 
-def test_get_image_uses_etag_cache(client, auth_headers, ol: LocalBackendHarness):
-    seed(ol, "projA", files=("images/dish01/D1.png",))
+def test_get_image_uses_etag_cache(client, auth_headers, harness: LocalBackendHarness):
+    seed(harness, "projA", files=("images/dish01/D1.png",))
     headers = auth_headers(client)
     client.post("/api/v2/projects/scan", headers=headers)
 
@@ -24,21 +25,21 @@ def test_get_image_uses_etag_cache(client, auth_headers, ol: LocalBackendHarness
     assert cached.status_code == 304 and cached.content == b""
 
 
-def test_get_image_missing_is_404(client, auth_headers, ol):
-    seed(ol, "projA", files=("a.png",))
+def test_get_image_missing_is_404(client, auth_headers, harness):
+    seed(harness, "projA", files=("a.png",))
     headers = auth_headers(client)
     client.post("/api/v2/projects/scan", headers=headers)
     missing = client.get("/api/v2/projects/projA/images/nope.png", headers=headers)
     assert missing.status_code == 404 and missing.json()["code"] == "not_found"
 
 
-def test_images_require_a_session(client, ol):
-    seed(ol, "projA", files=("a.png",))
+def test_images_require_a_session(client, harness):
+    seed(harness, "projA", files=("a.png",))
     assert client.get("/api/v2/projects/projA/images/a.png").status_code == 401
 
 
-def test_upload_is_content_addressed(client, auth_headers, ol, services):
-    seed(ol, "projA", files=("a.png",))
+def test_upload_is_content_addressed(client, auth_headers, harness, services):
+    seed(harness, "projA", files=("a.png",))
     headers = auth_headers(client)
     client.post("/api/v2/projects/scan", headers=headers)
 
@@ -63,8 +64,8 @@ def test_upload_is_content_addressed(client, auth_headers, ol, services):
     assert client.get("/api/v2/images/deadbeef", headers=headers).status_code == 404
 
 
-def test_upload_size_limit(client, auth_headers, ol, services):
-    seed(ol, "projA", files=("a.png",))
+def test_upload_size_limit(client, auth_headers, harness, services):
+    seed(harness, "projA", files=("a.png",))
     headers = auth_headers(client)
     client.post("/api/v2/projects/scan", headers=headers)
     services.settings.max_upload_bytes = 4

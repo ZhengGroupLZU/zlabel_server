@@ -12,9 +12,9 @@ from v2.db.models import Annotation, AnnotationVersion, Label, Task
 ROOT = "/zlabel_server/projects"
 
 
-def bootstrap(client, auth_headers, ol, files=("a.png", "b.png")) -> dict:
-    seed(ol, "projA", files=files)
-    ol.users["bob"] = "pw"
+def bootstrap(client, auth_headers, harness, files=("a.png", "b.png")) -> dict:
+    seed(harness, "projA", files=files)
+    harness.users["bob"] = "pw"
     admin = auth_headers(client, "rainy")
     client.post("/api/v2/projects/scan", headers=admin)
     return {"admin": admin, "bob": auth_headers(client, "bob", "pw")}
@@ -46,8 +46,8 @@ def put(client, headers, anno, payload, **params):
 
 
 # region basics
-def test_save_creates_version_one_and_claims_the_task(client, auth_headers, ol, db):
-    headers = bootstrap(client, auth_headers, ol)
+def test_save_creates_version_one_and_claims_the_task(client, auth_headers, harness, db):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
 
     resp = put(client, headers["admin"], anno, document("Root", "Shoot"))
@@ -56,9 +56,9 @@ def test_save_creates_version_one_and_claims_the_task(client, auth_headers, ol, 
     assert body["version"] == 1 and body["state"] == "draft"
     assert body["labels"] == ["Root", "Shoot"]
 
-    # the document landed in OpenList, current + history
-    assert json.loads(ol.files[f"{ROOT}/projA/.zlabel/annos/{anno}.zlabel"])["results"]
-    assert f"{ROOT}/projA/.zlabel/annos/_history/{anno}/v1.zlabel" in ol.files
+    # the document landed in the storage tree, current + history
+    assert json.loads(harness.files[f"{ROOT}/projA/.zlabel/annos/{anno}.zlabel"])["results"]
+    assert f"{ROOT}/projA/.zlabel/annos/_history/{anno}/v1.zlabel" in harness.files
 
     with db.session_scope() as session:
         task = session.scalar(select(Task))
@@ -68,8 +68,8 @@ def test_save_creates_version_one_and_claims_the_task(client, auth_headers, ol, 
         assert session.scalar(select(AnnotationVersion)).version == 1
 
 
-def test_get_returns_the_document_and_404_when_missing(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_get_returns_the_document_and_404_when_missing(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
 
     missing = client.get(f"/api/v2/projects/projA/annotations/{anno}", headers=headers["admin"])
@@ -83,8 +83,8 @@ def test_get_returns_the_document_and_404_when_missing(client, auth_headers, ol)
     assert got.json()["results"]["r0"]["labels"][0]["name"] == "Root"
 
 
-def test_second_save_bumps_the_version(client, auth_headers, ol, db):
-    headers = bootstrap(client, auth_headers, ol)
+def test_second_save_bumps_the_version(client, auth_headers, harness, db):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root"))
     put(client, headers["admin"], anno, document("Root", "Shoot"), base_version=1)
@@ -95,15 +95,15 @@ def test_second_save_bumps_the_version(client, auth_headers, ol, db):
             v.version for v in session.scalars(select(AnnotationVersion).order_by(AnnotationVersion.version))
         ]
         assert versions == [1, 2]
-    assert f"{ROOT}/projA/.zlabel/annos/_history/{anno}/v2.zlabel" in ol.files
+    assert f"{ROOT}/projA/.zlabel/annos/_history/{anno}/v2.zlabel" in harness.files
 
 
 # endregion
 
 
 # region optimistic locking
-def test_stale_base_version_conflicts(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_stale_base_version_conflicts(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root"))  # v1 by rainy
     put(client, headers["admin"], anno, document("Root", "Shoot"), base_version=1)  # v2 by rainy
@@ -119,8 +119,8 @@ def test_stale_base_version_conflicts(client, auth_headers, ol):
     assert body["detail"]["updated_at"]
 
 
-def test_save_without_base_version_needs_a_free_version(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_save_without_base_version_needs_a_free_version(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root"))
     # a blind write on top of v1 is refused: nobody may clobber unseen work
@@ -128,8 +128,8 @@ def test_save_without_base_version_needs_a_free_version(client, auth_headers, ol
     assert put(client, headers["admin"], anno, document("Root2"), base_version=1).status_code == 200
 
 
-def test_force_overwrite_is_reviewer_only(client, auth_headers, ol, db):
-    headers = bootstrap(client, auth_headers, ol)
+def test_force_overwrite_is_reviewer_only(client, auth_headers, harness, db):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root"))
     hand_over(client, headers["admin"], headers["bob"], anno)
@@ -144,8 +144,8 @@ def test_force_overwrite_is_reviewer_only(client, auth_headers, ol, db):
         assert session.scalar(select(Annotation)).version == 3
 
 
-def test_lease_conflict_on_save(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_lease_conflict_on_save(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root"))
 
@@ -154,8 +154,8 @@ def test_lease_conflict_on_save(client, auth_headers, ol):
     assert other.json()["detail"]["claimed_by"] == "rainy"
 
 
-def test_editing_a_submitted_task_needs_a_reviewer(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_editing_a_submitted_task_needs_a_reviewer(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root"), base_version=0)
     assert client.post(f"/api/v2/tasks/{anno}/submit", headers=headers["admin"]).status_code == 200
@@ -167,8 +167,8 @@ def test_editing_a_submitted_task_needs_a_reviewer(client, auth_headers, ol):
     assert forced.status_code == 200 and forced.json()["state"] == "submitted"
 
 
-def test_reworking_a_rejected_task_returns_it_to_draft(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_reworking_a_rejected_task_returns_it_to_draft(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root"), base_version=0)
     client.post(f"/api/v2/tasks/{anno}/submit", headers=headers["admin"])
@@ -185,8 +185,8 @@ def test_reworking_a_rejected_task_returns_it_to_draft(client, auth_headers, ol)
 
 
 # region history
-def test_version_history_and_preview(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_version_history_and_preview(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root"), note="first")
     put(client, headers["admin"], anno, document("Root", "Shoot"), base_version=1)
@@ -206,8 +206,8 @@ def test_version_history_and_preview(client, auth_headers, ol):
     assert len(current.json()["results"]) == 2
 
 
-def test_label_registry_grows_with_annotations(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_label_registry_grows_with_annotations(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root", "Shoot"))
 
@@ -217,8 +217,8 @@ def test_label_registry_grows_with_annotations(client, auth_headers, ol):
         assert len(session.scalars(select(Label)).all()) == 2
 
 
-def test_unknown_task_and_project_mismatch_are_404(client, auth_headers, ol):
-    headers = bootstrap(client, auth_headers, ol)
+def test_unknown_task_and_project_mismatch_are_404(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     assert put(client, headers["admin"], "deadbeef", document("Root")).status_code == 404
     assert put(client, headers["admin"], anno, document("Root")).status_code in (200, 409)

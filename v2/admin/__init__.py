@@ -1,17 +1,16 @@
 """Web administration UI (starlette-admin).
 
 Mounted at ``ZLSERVER_ADMIN_PATH`` (default ``/admin``) with cookie sessions from
-:class:`ZLabelAuthProvider`; everything the API exposes is still the source of truth
-for side effects (project creation, uploads, password hashing), so this layer can be
-replaced page by page later without touching the services.
+:class:`ZLabelAuthProvider`. The pages call the same services as the API, so audit
+rows and session revocation behave identically whichever surface an admin uses.
 
-    /admin            dashboard (storage, projects, states, audit peek)
-    /admin/user       accounts (role, enable/disable; no password editing)
-    /admin/project    project metadata
-    /admin/projectmember  membership (P4)
-    /admin/label      label registry
-    /admin/task       read-only frame/task inspection
-    /admin/auditlog   read-only audit trail
+    /admin                 dashboard: storage, progress, the project table, rescan
+    /admin/users           accounts: filter, create, role/enabled, password reset
+    /admin/projects        projects: filter/create; per-project overview (rename,
+                           metadata), files (browse/upload/preview), members,
+                           labels and frames
+    /admin/files           global storage browser
+    /admin/audit-log       read-only audit trail
 """
 
 from __future__ import annotations
@@ -19,17 +18,9 @@ from __future__ import annotations
 from starlette_admin.contrib.sqla import Admin
 
 from v2.admin.auth import ZLabelAuthProvider
-from v2.admin.views import (
-    AuditLogAdmin,
-    DashboardView,
-    LabelAdmin,
-    ProjectAdmin,
-    ProjectMemberAdmin,
-    TaskAdmin,
-    UserAdmin,
-)
+from v2.admin.views import AuditLogAdmin, DashboardView, FilesView, ProjectsView, UsersView
 from v2.core.logging import get_logger
-from v2.db.models import AuditLog, Label, Project, ProjectMember, Task, User
+from v2.db.models import AuditLog
 from v2.services.container import Services
 
 logger = get_logger("zlabel.v2.admin")
@@ -45,14 +36,12 @@ def build_admin(services: Services) -> Admin:
         auth_provider=ZLabelAuthProvider(services, base_url=settings.admin_path),
         index_view=DashboardView(services),
         secret_key=settings.secret_key or "zlabel-admin-dev-secret",
-        # keep the UI in the admins' language; the client UI is separate
+        # the UI stays in English: the desktop client's i18n is separate
     )
     for view in (
-        UserAdmin(User, menu_label="Users"),
-        ProjectAdmin(Project, menu_label="Projects"),
-        ProjectMemberAdmin(ProjectMember, menu_label="Members"),
-        LabelAdmin(Label, menu_label="Labels"),
-        TaskAdmin(Task, menu_label="Frames"),
+        UsersView(services),
+        ProjectsView(services),
+        FilesView(services),
         AuditLogAdmin(AuditLog, menu_label="Audit log"),
     ):
         admin.add_view(view)

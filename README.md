@@ -1,10 +1,11 @@
 # ZLabel Server
 
 Labeling backend for the ZLabel desktop client. FastAPI + SQLite + ONNXRuntime
-(SAM family) on top of OpenList (file storage and identity source).
+(SAM family), **self-hosted**: the server owns its storage tree and its accounts.
 
-**v2**: multi-user (sessions, roles), task claim/lease, submit/review workflow,
-versioned annotations, stateless inference in a separate process.
+**v2**: multi-user (sessions, roles, project membership), task claim/lease,
+submit/review workflow, versioned annotations, stateless inference in a separate
+process, web administration UI at `/admin`.
 
 ## Layout
 
@@ -13,24 +14,25 @@ v2/            # the API (only /api/v2 exists: v1 was deleted, see docs/)
   app.py       #   create_app() factory; state lives on app.state
   core/        #   settings, errors, logging
   db/          #   models + alembic migrations
-  api/v2/      #   routers (auth, projects, tasks, annotations, images, predict, health)
-  services/    #   business logic (auth/project/task/annotation/stats)
-  adapters/    #   OpenList + inference clients
-  vendor/      #   vendored OpenList SDK
+  api/v2/      #   routers (auth, projects, tasks, annotations, images, predict, health, admin)
+  services/    #   business logic (auth/project/task/annotation/storage)
+  adapters/    #   the edges: local disk storage + inference client + identity provider
+  admin/       #   starlette-admin UI (cookie sessions, admin role only)
 inference/     # model assets: sam_ort/ (runners), worker.py, ztypes.py, config.py
-docs/          # architecture-v2.md (design), client-migration-v2.md (desktop checklist)
-tests/         # v2 API/service tests, inference regression tests, vendor tests
+docs/          # architecture-v2.md (design), plan-selfhosted-storage.md (runbook)
+tests/         # v2 API/service tests, inference regression tests
 ```
 
 ## Usage
 
 ```console
 uv sync
-cp .env.example .env.v2        # adjust OpenList host/credentials, model
+cp .env.example .env.v2        # set ZLSERVER_STORAGE_ROOT (and the model settings)
 uv run alembic upgrade head    # create the v2 schema (fresh database)
 
-# API (http://127.0.0.1:8000, OpenAPI at /docs)
-uv run fastapi run v2/main.py
+# create the first admin, then start the API
+uv run python -m v2.cli user add <name> --role admin
+uv run fastapi run v2/main.py  # http://127.0.0.1:8000, OpenAPI at /docs
 
 # inference worker (own process, own GPU; needs ZLSERVER_MODEL_* + ZLSERVER_INFERENCE_TOKEN)
 uv run fastapi run v2/inference_worker/main.py --port 8001
@@ -52,9 +54,15 @@ uv run ruff check . && uv run ruff format .
 
 - `GET /api/v2/health` reports capabilities; the client uses it to gate claim/
   review UI and to refuse a version mismatch.
-- Annotation files stay in OpenList (`<project>/zlabel/<anno_id>.zlabel`), so
-  historical annotations remain readable; `anno_id` is
-  `md5("<project>/<project-relative posix path>")` on both sides.
+- The server owns the datasets: `<ZLSERVER_STORAGE_ROOT>/<project>/…` with
+  annotations in `<project>/.zlabel/annos/<anno_id>.zlabel` — the same layout the
+  desktop uses for a local dataset, so one directory works on both sides.
+  `anno_id` is `sha256("<project id>/<project-relative posix path>")`, where the project id is
+  the dataset's `.zlabel/project.json` `"id"` (the desktop's `Project.id`) — renaming a
+  project or its directory does not invalidate annotations.
+- Accounts are local (scrypt hashes in the `users` table); `/admin` manages them
+  (Dashboard / Users / Projects / Files / Audit log), with project-scoped files,
+  members, labels and frames on the project detail page.
 - The inference worker is a separate process: the API never holds model state
   (this removes v1's "predict on whatever frame was loaded last" bug).
 - v1 is gone; its last state is the `onnx` branch (`fc04ef4`).

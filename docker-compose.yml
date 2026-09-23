@@ -10,18 +10,17 @@ services:
     environment:
       - ZLSERVER_DATABASE_URL=sqlite+pysqlite:///./data/zlabel_server_v2.db
       - ZLSERVER_UPLOAD_DIR=/app/data/uploads
-      - ZLSERVER_OPLIST_HOST=http://172.20.0.3:5244
-      - ZLSERVER_OPLIST_PROJ_DIR=/zlabel_server/projects
-      - ZLSERVER_OPLIST_PROJ_NAME=seed_germ_1280
-      - ZLSERVER_PROJECT_SCAN_INTERVAL=300
+      # the server owns the datasets: mount the host directory at ./data/storage
+      - ZLSERVER_STORAGE_ROOT=/app/data/storage
+      # first-run admin (only created when the account does not exist yet)
+      - ZLSERVER_BOOTSTRAP_ADMIN=${ZLSERVER_BOOTSTRAP_ADMIN:-admin}
+      - ZLSERVER_BOOTSTRAP_PASSWORD=${ZLSERVER_BOOTSTRAP_PASSWORD:-change-me}
       # the inference worker (separate service; see below / M3)
       - ZLSERVER_INFERENCE_URL=http://zlabel_inference:8001
       - ZLSERVER_INFERENCE_TOKEN=${ZLSERVER_INFERENCE_TOKEN:-change-me}
     networks:
       zlabel_server_network:
         ipv4_address: 172.20.0.2
-    depends_on:
-      - openlist
     restart: unless-stopped
 
   # Inference worker: same image, worker entrypoint, owns the GPU. Because the
@@ -47,22 +46,6 @@ services:
     networks:
       zlabel_server_network:
         ipv4_address: 172.20.0.4
-    restart: unless-stopped
-
-  openlist:
-    image: 'openlistteam/openlist:latest'
-    container_name: openlist
-    user: '0:0' # Please replace `0:0` with the actual user ID and group ID you want to use to run OpenList.
-    volumes:
-      - './data/openlist:/opt/openlist/data'
-      - '/mnt/datasets:/mnt/datasets'
-    ports:
-      - '5244:5244'
-    environment:
-      - UMASK=022
-    networks:
-      zlabel_server_network:
-        ipv4_address: 172.20.0.3
     restart: unless-stopped
 
 networks:
