@@ -3,4 +3,11 @@
 __pycache__
 .vscode
 notebooks
-
+data
+assets
+tests
+docs
+.pytest_cache
+.ruff_cache
+*.db
+*.onnx
