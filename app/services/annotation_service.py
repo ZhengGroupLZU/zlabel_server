@@ -174,7 +174,8 @@ class AnnotationService:
             if task.project.name != project:
                 raise NotFound(f"task {anno_id} does not belong to project {project}")
 
-            if task.state in (STATE_SUBMITTED, STATE_APPROVED) and not force:
+            if task.state == STATE_APPROVED and not force:
+                # approved is final: only a reviewer's reopen unlocks it
                 raise Conflict(
                     f"task is {task.state}: reopen it before editing",
                     detail={"state": task.state},
@@ -197,8 +198,10 @@ class AnnotationService:
             task.labels = self.projects.ensure_labels(session, task.project_id, labels)
             # keep the instance registry / links in step with the document
             self.instances.sync_document(session, project_id=task.project_id, task=task, document=document)
-            if task.state == STATE_REJECTED and not force:
-                task.state = STATE_DRAFT  # the annotator is reworking a rejected task
+            if task.state in (STATE_REJECTED, STATE_SUBMITTED) and not force:
+                # reworking a rejected - or already submitted - task drops it back to
+                # draft, so the reviewer never approves a version nobody has seen
+                task.state = STATE_DRAFT
             self.tasks.renew_lease(session, task, auth.user_id)
             task.updated_at = utcnow()
 

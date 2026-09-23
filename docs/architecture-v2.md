@@ -116,6 +116,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 - `POST /api/v2/tasks/{anno_id}/claim` → 200（我是持有者）/ 409（他人持有，带 `claimed_by/lease_expires_at`）；`force=true` 仅 reviewer/admin。
 - 保存标注会自动 `claim + 续租`（幂等）；租约 TTL 默认 30 分钟，客户端每 10 分钟心跳。
 - `submit` 把 `draft → submitted`（annotator 即可）；`review` 支持 `approve|reject`（reviewer/admin），`reject` 必须带 note，退回 `draft` 并清空领取。
+- **重新编辑**（`PUT annotations`）会把 `submitted`／`rejected` 的任务退回 `draft`：被改过的提交对复核者已失效，不能让人通过一个没见过的版本；`approved` 是终态，只有 reviewer 的 `reopen` 能解锁（`force=true` 也只有 reviewer 可用，且不改状态）。
 - 进度：`{total, draft, submitted, approved, rejected}`，可 `by_user=true` 按人统计。
 
 ## 6. API v2 契约（摘要）
@@ -148,7 +149,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 | `GET /api/v2/images/{sha256}` | session | 取回客户端上传过（内容寻址）的任务图像 |
 | `PUT /api/v2/projects/{p}/images/{rel_path:path}` | session | 本地上传（本地数据集 + 远端推理） |
 | `GET /api/v2/projects/{p}/annotations/{anno_id}` | session | 200 + `ETag: v{n}` / 404 = 未标注 |
-| `PUT /api/v2/projects/{p}/annotations/{anno_id}` | 持有者 | body 含 `base_version`；200 `{version}` / 409 冲突（`server_version, updated_by, updated_at`）/ `force=true` 仅 reviewer+ |
+| `PUT /api/v2/projects/{p}/annotations/{anno_id}` | 持有者 | body 含 `base_version`；200 `{version}` / 409 冲突（`server_version, updated_by, updated_at`）/ `force=true` 仅 reviewer+。改写 `submitted`／`rejected` 的任务会退回 `draft`；`approved` 需 reviewer `reopen` |
 | `GET /api/v2/projects/{p}/annotations/{anno_id}/versions[/{n}]` | session | 版本历史 / 某一版内容（历史文件存 `zlabel/_history/<anno_id>/v<n>.zlabel`） |
 | `POST /api/v2/projects/{p}/predict` | session | 交互/文本推理，**无状态**：multipart `data`(JSON) + 可选 `image`；`data` 里可带 `rel_path`（服务端去存储树取）或 `image_sha256`（取上传缓存） |
 | `GET /api/v2/projects/{p}/progress` | session | `{total,draft,submitted,approved,rejected}`，`by_user=true` 时带按人明细 |

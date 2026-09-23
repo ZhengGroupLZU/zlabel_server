@@ -147,7 +147,9 @@ in `docs/architecture-v2.md` (read it before structural changes).
   `models.py` (users, sessions, projects, project_members, labels, tasks, instances,
   instance_results, annotations, annotation_versions, audit_log, link tables),
   `migrations/` (alembic).
-  State machine: `draft → submitted → approved|rejected`; claim trio
+  State machine: `draft → submitted → approved|rejected`; saving an already
+  `submitted`/`rejected` task drops it back to `draft` (the submission is stale),
+  only `approved` needs a reviewer's `reopen`; claim trio
   `claimed_by/claimed_at/lease_expires_at`.
 - `app/api/v2/` — routers only (thin): `auth`, `projects`, `labels`, `instances`,
   `tasks`, `annotations`, `images`, `predict`, `health`; shared dependencies live in
@@ -250,8 +252,10 @@ in `docs/architecture-v2.md` (read it before structural changes).
   dataset, or the row of the old directory name), the scanner mints a new key and
   writes it back. Run `uv run python -m app.cli migrate-anno-ids` afterwards to rename
   the annotation files of that project.
-- Claim state: `draft → submitted → approved|rejected` (`reopen` pulls back to draft).
-  A claim carries `lease_expires_at`; an expired lease is claimable by anyone, a live
+- Claim state: `draft → submitted → approved|rejected`. A save reworks a `submitted`
+  or `rejected` task back to `draft` - the version the reviewer was sent is stale -
+  while `approved` is final and only a reviewer's `reopen` (or a forced save) unlocks
+  it. A claim carries `lease_expires_at`; an expired lease is claimable by anyone, a live
   one answers 409 `lease_conflict` with the holder + expiry. Saves renew the lease and
   a save without `base_version` is only accepted while the task has no stored version.
 - `TaskRow` resolves the holder/reviewer names with one extra query: reading them via

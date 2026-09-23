@@ -154,17 +154,32 @@ def test_lease_conflict_on_save(client, auth_headers, harness):
     assert other.json()["detail"]["claimed_by"] == "rainy"
 
 
-def test_editing_a_submitted_task_needs_a_reviewer(client, auth_headers, harness):
+def test_editing_a_submitted_task_returns_it_to_draft(client, auth_headers, harness):
+    """The submitter owns their submission: reworking it drops the task back to
+    draft so the reviewer never approves a version nobody has seen."""
     headers = bootstrap(client, auth_headers, harness)
     anno = task_id(client, headers["admin"])
     put(client, headers["admin"], anno, document("Root"), base_version=0)
     assert client.post(f"/api/v2/tasks/{anno}/submit", headers=headers["admin"]).status_code == 200
 
+    reworked = put(client, headers["admin"], anno, document("Root2"), base_version=1)
+    assert reworked.status_code == 200
+    assert reworked.json()["state"] == "draft"
+
+
+def test_editing_an_approved_task_needs_a_reviewer(client, auth_headers, harness):
+    headers = bootstrap(client, auth_headers, harness)
+    anno = task_id(client, headers["admin"])
+    put(client, headers["admin"], anno, document("Root"), base_version=0)
+    client.post(f"/api/v2/tasks/{anno}/submit", headers=headers["admin"])
+    approved = client.post(f"/api/v2/tasks/{anno}/review", json={"decision": "approve"}, headers=headers["admin"])
+    assert approved.status_code == 200
+
     locked = put(client, headers["admin"], anno, document("Root2"), base_version=1)
-    assert locked.status_code == 409 and locked.json()["detail"]["state"] == "submitted"
+    assert locked.status_code == 409 and locked.json()["detail"]["state"] == "approved"
 
     forced = put(client, headers["admin"], anno, document("Root2"), base_version=1, force="true")
-    assert forced.status_code == 200 and forced.json()["state"] == "submitted"
+    assert forced.status_code == 200 and forced.json()["state"] == "approved"
 
 
 def test_reworking_a_rejected_task_returns_it_to_draft(client, auth_headers, harness):
