@@ -1,5 +1,7 @@
 services:
   zlabel_server:
+    user: "${ZLABEL_UID}:${ZLABEL_GID}"
+    
     build:
       context: .
     ports:
@@ -10,6 +12,10 @@ services:
     env_file:
       - .env.v2
     environment:
+      - HOME=/tmp
+      - UV_CACHE_DIR=/tmp/uv-cache
+      - UV_NO_SYNC=1
+      # ZLabel server
       - ZLSERVER_DATABASE_URL=sqlite+pysqlite:///./data/zlabel_server_v2.db
       - ZLSERVER_UPLOAD_DIR=/app/data/uploads
       # the server owns the datasets: mount the host directory at ./data/storage
@@ -35,10 +41,14 @@ services:
   # Inference worker: same image, worker entrypoint, owns the GPU. Because the
   # model lives here, restarting the API never reloads it.
   zlabel_inference:
+    user: "${ZLABEL_UID}:${ZLABEL_GID}"
     build:
       context: .
     command: ["sh", "-c", "uv run fastapi run app/inference_worker/main.py --host 0.0.0.0 --port 8001"]
     environment:
+      - HOME=/tmp
+      - UV_CACHE_DIR=/tmp/uv-cache
+      - UV_NO_SYNC=1
       - ZLSERVER_MODEL_NAME=SlimSAM   # EdgeSAM SAM SlimSAM SAM2 SAM3
       - ZLSERVER_MODEL_DIR=/app/assets/onnx
       - ZLSERVER_ORT_BACKEND=CUDA     # CPU CUDA (falls back to CPU if unavailable)
