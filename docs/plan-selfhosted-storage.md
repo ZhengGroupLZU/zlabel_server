@@ -18,7 +18,7 @@
 | P3 自建账号 | `v2/adapters/identity.py`：`IdentityProvider` 协议 + `LocalIdentity`（**scrypt**，标准库，无新依赖）；`users.password_hash`（alembic `8394f2f1aff0`）；启动引导 `ZLSERVER_BOOTSTRAP_ADMIN/PASSWORD`（只建不改） | `tests/v2/test_identity.py` |
 | P4 项目成员 | `project_members` 表（迁移 `045be3078645`）+ `ProjectService.role_for/require_access/require_project_reviewer` + 成员 CRUD 端点；`ZLSERVER_PROJECT_ACCESS_MODE=open\|strict`（默认 open 不改变现状）；项目列表/任务/标注/标签/复核全部按成员过滤，复核与标签写用**项目级**角色 | `tests/v2/test_members.py` |
 | P5 REST + CLI | `/api/v2/admin/users`（建号/改角色/启停/改密）、`/api/v2/admin/storage`、`/api/v2/admin/files`（list/upload/download/delete/mkdir/move，仅本地后端）；CLI 增 `project ls\|members\|add-member` | `tests/v2/test_admin.py` + CLI 实测 |
-| P5b Web 后台 | `/admin`（`starlette-admin` + 手写页面，cookie 会话复用 `AuthService`，仅 admin 角色）：**Dashboard**（存储/进度/项目表/重扫）、**Users**（筛选/建号/改角色/启停/改密）、**Projects**（列表筛选/新建；详情页：概览重命名与元数据、文件浏览上传预览删除、成员、标签、帧表带状态筛选）、**Files**（整树浏览）、只读 **Audit log** | `tests/v2/test_admin_ui.py` |
+| P5b Web 后台 | `/admin`（`starlette-admin` + 手写页面，cookie 会话复用 `AuthService`，仅 admin 角色）：**Dashboard**（存储/进度/项目表/重扫）、**Users**（筛选/建号/改角色/启停/改密）、**Projects**（列表筛选/新建；详情页：概览重命名与元数据、文件浏览上传预览删除、成员、标签、任务表带状态筛选）、**Files**（整树浏览）、只读 **Audit log** | `tests/v2/test_admin_ui.py` |
 | P6 下线 OpenList | 删除 vendor SDK（≈2000 行）+ `OpenListAdapter`/`OpenListIdentity` + 全部开关；storage 协议不再透传 token；marker 发现与 health 的 openlist 探测移除；DB 列改名（迁移 `4f7c1d2ab9e3`） | 全量测试在本地后端上绿 |
 
 自建端到端（本地账号 + 本地存储，含领取/保存/提交/复核/进度）：`tests/v2/test_local_backend_api.py::test_self_hosted_end_to_end`。
@@ -69,7 +69,7 @@
 5. 旧标注改名：`uv run python -m v2.cli migrate-anno-ids --dry-run` 看计划，确认后去掉
    `--dry-run`（把 `md5("<项目名>/<路径>")` 的标注文件与历史版本改成 `sha256("<key>/<路径>")`，
    并同步 tasks/annotations/annotation_versions 行；桌面端本地数据集首次打开时也会自动改名）。
-6. 校验：客户端重新扫描后，之前已标注的帧应能直接打开（anno_id 已换新名，内容不变）。
+6. 校验：客户端重新扫描后，之前已标注的任务应能直接打开（anno_id 已换新名，内容不变）。
 7. 标记文件 `.zlabel-server-project-root` 已不再需要，可以删掉（迁移不会动它）。
 8. 回滚：反向运行 `migrate-layout --source .zlabel/annos --target zlabel`；如果要恢复 OpenList 后端，
    需要退回到 P6 之前的版本（本仓库不再提供该实现）。
@@ -77,6 +77,6 @@
 ## 必须配套的运维
 
 - **备份**：数据现在是自家盘上的普通文件 → 文件系统快照/`rsync --hard-links` + SQLite `VACUUM INTO`（保证 DB 与文件同一时点）。
-- **磁盘**：监控剩余空间；`ZLSERVER_MAX_UPLOAD_BYTES` 限制单帧上传。
+- **磁盘**：监控剩余空间；`ZLSERVER_MAX_UPLOAD_BYTES` 限制单个任务图像上传。
 - **权限**：进程用户必须对 `STORAGE_ROOT` 有写权限；符号链接与 `..` 已被拒绝。
 - **安全**：登录已限流失败即拒（scrypt 校验），后续可加失败计数与审计告警。

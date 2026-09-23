@@ -62,7 +62,7 @@ class TaskListOut(BaseModel):
 class GroupOut(BaseModel):
     group: str
     count: int = 0
-    frames: list[TaskOut] = Field(default_factory=list)
+    tasks: list[TaskOut] = Field(default_factory=list)
 
 
 class ReviewRequest(BaseModel):

@@ -101,7 +101,7 @@ def test_migrate_anno_ids_rewrites_files_and_rows(services, settings, db):
         task.anno_id = old_id
         session.add(Annotation(task_id=task.id, anno_id=old_id, version=1, path=""))
         session.add(AnnotationVersion(task_id=task.id, version=1, path=""))
-    # a stray file with no task row still names its frame
+    # a stray file with no task row still names its task
     stray_old = legacy_anno_id_for("projA", "images/stray.png")
     storage.put_bytes(
         f"{storage.zlabel_dir('projA')}/{stray_old}.zlabel",

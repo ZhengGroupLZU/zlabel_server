@@ -38,7 +38,7 @@ def _save(client, headers, anno_id: str, document: dict) -> None:
 
 
 def _annotate(client, auth_headers, harness, document: dict) -> str:
-    """Seed one frame, scan it and save ``document`` as its annotation."""
+    """Seed one task, scan it and save ``document`` as its annotation."""
     from tests.v2.test_projects import seed
 
     seed(harness, "projA", files=("images/D1.png",))
@@ -84,7 +84,7 @@ def test_saving_an_annotation_mirrors_instances(client, auth_headers, harness, s
     rows = services.instances.list_instances("projA")
     assert [(row["number"], row["status"]) for row in rows] == [(1, "normal_seed"), (2, "moldy_seed")]
     assert [row["results"] for row in rows] == [2, 1]
-    assert [row["frames"] for row in rows] == [1, 1]
+    assert [row["tasks"] for row in rows] == [1, 1]
     assert all(row["color"] in LABEL_PALETTE for row in rows)
     assert [row["color"] for row in rows] == list(dict.fromkeys(row["color"] for row in rows))
 

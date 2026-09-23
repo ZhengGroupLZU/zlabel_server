@@ -31,6 +31,6 @@ def get_uploaded_image(
     _token: None = Depends(require_internal_token),
     services: Services = Depends(get_services),
 ) -> Response:
-    """Serve an uploaded frame so the worker can pull it on an embedding miss."""
+    """Serve an uploaded task image so the worker can pull it on an embedding miss."""
     content = services.images.get(digest)
     return Response(content=content, media_type="application/octet-stream")

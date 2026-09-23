@@ -1,9 +1,9 @@
-"""The serving engine: one model, one embedding snapshot per frame, a small queue.
+"""The serving engine: one model, one embedding snapshot per task image, a small queue.
 
 Why snapshots: the runner keeps the encoded image in a handful of arrays, so the
 worker can cache them per image (``EmbeddingCache``) and *restore* one instead of
-re-running the encoder. That is what makes repeated clicks on the same frame cheap
-and — more importantly — guarantees a job never runs on another frame's encoding
+re-running the encoder. That is what makes repeated clicks on the same task image cheap
+and — more importantly — guarantees a job never runs on another task image's encoding
 (the v1 bug: a global "current image" shared by every client).
 """
 

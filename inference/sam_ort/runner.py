@@ -49,7 +49,7 @@ class _ImageStateMixin:
     """Snapshot/restore the *encoded* image.
 
     The serving layer (v2's inference worker) caches these snapshots per image so
-    repeated prompts on the same frame skip the encoder. Only the arrays the
+    repeated prompts on the same task image skip the encoder. Only the arrays the
     decode path reads are touched — the numerics stay exactly as they were.
     """
 

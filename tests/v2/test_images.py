@@ -1,4 +1,4 @@
-"""Frame reads (caching, per-user ACL) and uploads (content-addressed store)."""
+"""Task reads (caching, per-user ACL) and uploads (content-addressed store)."""
 
 from __future__ import annotations
 
@@ -44,8 +44,8 @@ def test_upload_is_content_addressed(client, auth_headers, harness, services):
     client.post("/api/v2/projects/scan", headers=headers)
 
     first = client.put(
-        "/api/v2/projects/projA/images/local/frame.png",
-        files={"file": ("frame.png", b"frame-bytes")},
+        "/api/v2/projects/projA/images/local/task.png",
+        files={"file": ("task.png", b"task-bytes")},
         headers=headers,
     )
     assert first.status_code == 200, first.text
@@ -53,14 +53,14 @@ def test_upload_is_content_addressed(client, auth_headers, harness, services):
     assert services.images.has(digest)
 
     again = client.put(
-        "/api/v2/projects/projA/images/local/frame.png",
-        files={"file": ("frame.png", b"frame-bytes")},
+        "/api/v2/projects/projA/images/local/task.png",
+        files={"file": ("task.png", b"task-bytes")},
         headers=headers,
     )
     assert again.json()["sha256"] == digest  # same bytes -> same digest
 
     served = client.get(f"/api/v2/images/{digest}", headers=headers)
-    assert served.status_code == 200 and served.content == b"frame-bytes"
+    assert served.status_code == 200 and served.content == b"task-bytes"
     assert client.get("/api/v2/images/deadbeef", headers=headers).status_code == 404
 
 

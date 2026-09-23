@@ -27,7 +27,7 @@ class ProjectOut(BaseModel):
     display_name: str = ""
     description: str = ""
     active: bool = True
-    #: the frames form sequences (``group``/``day`` are parsed from the path)
+    #: the tasks form sequences (``group``/``day`` are parsed from the path)
     timeline: bool = True
     progress: ProgressOut | None = None
 
@@ -47,7 +47,7 @@ class ProjectOut(BaseModel):
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     display_name: str = ""
-    #: off = the frames do not form sequences (no ``group``/``day`` parsing)
+    #: off = the tasks do not form sequences (no ``group``/``day`` parsing)
     timeline: bool = True
 
 
@@ -104,7 +104,7 @@ class InstanceOut(BaseModel):
     color: str = "#000000"
     archived: bool = False
     results: int = 0
-    frames: int = 0
+    tasks: int = 0
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

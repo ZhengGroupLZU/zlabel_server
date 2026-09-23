@@ -1,6 +1,6 @@
 """Task listing, claim/lease and the submit/review workflow.
 
-Claiming is what keeps two annotators off the same frame: a claim carries a lease
+Claiming is what keeps two annotators off the same task: a claim carries a lease
 that expires, so a crashed client cannot lock a task forever. Reviewers may force
 their way in; everyone else gets a ``lease_conflict`` carrying the current holder.
 """
@@ -115,7 +115,7 @@ class TaskService:
         claim: str | None = None,
         limit_groups: int = 200,
     ) -> list[dict]:
-        """Sequence groups with their frames (for the client's timeline)."""
+        """Sequence groups with their tasks (for the client's timeline)."""
         with self.db.session_scope() as session:
             query = self._base_query(session, project)
             states = _split_states(state)
@@ -128,8 +128,8 @@ class TaskService:
                 grouped.setdefault(task.group_name, []).append(task)
             result = []
             for name in sorted(grouped)[:limit_groups]:
-                frames = grouped[name]
-                result.append({"group": name, "count": len(frames), "frames": self._rows(session, frames)})
+                tasks = grouped[name]
+                result.append({"group": name, "count": len(tasks), "tasks": self._rows(session, tasks)})
             return result
 
     def _base_query(self, session: OrmSession, project: str | None) -> Select:
@@ -165,7 +165,7 @@ class TaskService:
             return query.order_by(Task.updated_at.desc())
         if order == "random":
             return query.order_by(func.random())
-        # sequence: grouped frames (by group, day) first, ungrouped singles last
+        # sequence: grouped tasks (by group, day) first, ungrouped singles last
         return query.order_by((Task.group_name == "").asc(), Task.group_name, Task.day, Task.rel_path)
 
     def _rows(self, session: OrmSession, tasks: list[Task]) -> list[TaskRow]:
@@ -258,7 +258,7 @@ class TaskService:
 
         Only the current holder may renew, and only while the lease has not
         expired: a lapsed lease is a lapsed lease (re-claim it instead). Submitting
-        a frame clears the lease, so a heartbeat after that is a conflict too.
+        a task clears the lease, so a heartbeat after that is a conflict too.
         """
         with self.db.session_scope() as session:
             task = self._must_get(session, anno_id)
@@ -329,7 +329,7 @@ class TaskService:
 
     # region workflow
     def submit(self, auth: AuthContext, anno_id: str, *, force: bool = False) -> TaskRow:
-        """Annotator hands the frame to review (needs a stored annotation)."""
+        """Annotator hands the task to review (needs a stored annotation)."""
         with self.db.session_scope() as session:
             task = self._must_get(session, anno_id)
             if not force and task.claimed_by != auth.user_id:
@@ -356,7 +356,7 @@ class TaskService:
             return self._rows(session, [task])[0]
 
     def review(self, auth: AuthContext, anno_id: str, decision: str, note: str = "") -> TaskRow:
-        """Reviewer approves or rejects a submitted frame."""
+        """Reviewer approves or rejects a submitted task."""
         auth.require_reviewer()
         if decision not in ("approve", "reject"):
             raise ValidationFailed(f"unknown decision: {decision}")
@@ -366,7 +366,7 @@ class TaskService:
             task = self._must_get(session, anno_id)
             if task.state != STATE_SUBMITTED:
                 raise Conflict(
-                    f"task is {task.state}: only submitted frames can be reviewed",
+                    f"task is {task.state}: only submitted tasks can be reviewed",
                     detail={"state": task.state},
                 )
             task.reviewed_by = auth.user_id
@@ -389,7 +389,7 @@ class TaskService:
             return self._rows(session, [task])[0]
 
     def reopen(self, auth: AuthContext, anno_id: str, note: str = "") -> TaskRow:
-        """Reviewer pulls an approved frame back into the work queue."""
+        """Reviewer pulls an approved task back into the work queue."""
         auth.require_reviewer()
         with self.db.session_scope() as session:
             task = self._must_get(session, anno_id)

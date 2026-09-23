@@ -8,7 +8,7 @@ Two layers, on purpose:
 - **Audit log** stays a read-only starlette-admin ``ModelView``.
 
 The menu is Dashboard / Users / Projects / Files / Audit log; project-scoped data
-(frames, labels, members, files) lives on the project detail page (``?project=<name>``
+(tasks, labels, members, files) lives on the project detail page (``?project=<name>``
 plus a ``tab`` query parameter).
 """
 
@@ -53,7 +53,7 @@ MEDIA_TYPES = {
     ".webp": "image/webp",
     ".bmp": "image/bmp",
 }
-FRAME_PAGE_SIZE = 50
+TASK_PAGE_SIZE = 50
 
 
 # region html helpers
@@ -225,7 +225,7 @@ def _media_type(name: str) -> str:
 def _thumbnail(content: bytes, size: int = 320) -> bytes | None:
     """Downscale an image for the preview grid; ``None`` when it cannot be read.
 
-    Pillow is already a dependency (the client uploads frames as PNG/JPEG), and
+    Pillow is already a dependency (the client uploads task images as PNG/JPEG), and
     the grid uses ``loading="lazy"`` so only visible cells pay for this.
     """
     try:
@@ -333,7 +333,7 @@ class DashboardView(_PageView):
         return self.back(
             request,
             ok=(
-                f"scan done: {stats['projects']} project(s), {stats['tasks']} frame(s), "
+                f"scan done: {stats['projects']} project(s), {stats['tasks']} task(s), "
                 f"{stats['missing']} missing, {stats['deactivated']} deactivated"
             ),
         )
@@ -352,7 +352,7 @@ class DashboardView(_PageView):
                 f"{len(projects)} ({sum(1 for p in projects if p.active)} active)",
                 self.url(request, suffix="projects"),
             ),
-            ("Frames", str(progress.get("total", 0)), self.url(request, suffix="projects")),
+            ("Tasks", str(progress.get("total", 0)), self.url(request, suffix="projects")),
             (
                 "Reviewed",
                 " · ".join(f"{state} {progress.get(state, 0)}" for state in STATES),
@@ -382,12 +382,12 @@ class DashboardView(_PageView):
             f"<code>{_e(project.name)}</code></a></td>"
             f"<td>{_e(project.display_name)}</td>"
             f"<td>{_badge('active' if project.active else 'inactive', 'bg-success' if project.active else 'bg-secondary')}</td>"
-            f"<td>{stats.get(project.name, {}).get('frames', 0)}</td>"
+            f"<td>{stats.get(project.name, {}).get('tasks', 0)}</td>"
             f"<td>{stats.get(project.name, {}).get('members', 0)}</td>"
             "</tr>"
             for project in projects
         ]
-        table = _table(["project", "display name", "state", "frames", "members"], rows, "no projects yet")
+        table = _table(["project", "display name", "state", "tasks", "members"], rows, "no projects yet")
         scan = (
             f'<form method="post" action="{self.url(request, "/scan")}" class="d-inline">'
             f"{self.csrf(request)}"
@@ -589,7 +589,7 @@ class ProjectsView(_PageView):
     """Projects: list/filter/create, and a per-project page for everything scoped to it.
 
     Detail tabs: overview (rename/metadata), files (browse/upload/preview/delete),
-    members, labels and frames (the task table with its state filter).
+    members, labels and tasks (the task table with its state filter).
     """
 
     def __init__(self, services: Services) -> None:
@@ -651,7 +651,7 @@ class ProjectsView(_PageView):
             return self.back(request, error=e.message, project=project)
         return self.back(
             request,
-            ok=f"scan done: {stats['projects']} project(s), {stats['tasks']} frame(s)",
+            ok=f"scan done: {stats['projects']} project(s), {stats['tasks']} task(s)",
             project=project,
         )
 
@@ -679,7 +679,7 @@ class ProjectsView(_PageView):
         return self.back(
             request,
             ok=(
-                f"project {project!r} deleted ({stats['tasks']} frame(s)"
+                f"project {project!r} deleted ({stats['tasks']} task(s)"
                 + (", files removed)" if stats["files_deleted"] else ", files kept)")
             ),
         )
@@ -990,7 +990,7 @@ class ProjectsView(_PageView):
                 f"<td>{_e(project.display_name)}</td>"
                 f"<td>{_badge('active' if project.active else 'inactive', 'bg-success' if project.active else 'bg-secondary')}</td>"
                 f"<td>{_badge('timeline' if project.timeline else 'flat', 'bg-primary' if project.timeline else 'bg-secondary')}</td>"
-                f"<td>{counts.get('frames', 0)}</td>"
+                f"<td>{counts.get('tasks', 0)}</td>"
                 f"<td>{counts.get('members', 0)}</td>"
                 f"<td>{_e(project.updated_at.strftime('%Y-%m-%d %H:%M') if project.updated_at else '')}</td>"
                 f'<td class="d-flex gap-1"><a class="btn btn-sm btn-outline-primary" '
@@ -1000,7 +1000,7 @@ class ProjectsView(_PageView):
                 "</tr>"
             )
         table = _table(
-            ["project", "display name", "state", "frames", "timeline", "members", "updated", ""],
+            ["project", "display name", "state", "tasks", "timeline", "members", "updated", ""],
             rows,
             "no projects match these filters",
         )
@@ -1051,7 +1051,7 @@ class ProjectsView(_PageView):
         tabs = (
             ("overview", "Overview"),
             ("files", "Files"),
-            ("frames", "Frames"),
+            ("tasks", "Tasks"),
             ("labels", "Labels"),
             ("instances", "Instances"),
             ("members", "Members"),
@@ -1071,7 +1071,7 @@ class ProjectsView(_PageView):
             '<div class="d-flex justify-content-between align-items-center mb-2">'
             f'<div><h2 class="m-0">{_e(project.display_name or project.name)} '
             f"{_badge('active' if project.active else 'inactive', 'bg-success' if project.active else 'bg-secondary')}</h2>"
-            f'<div class="text-muted"><code>{_e(project.name)}</code> · {counts.get("frames", 0)} frames · '
+            f'<div class="text-muted"><code>{_e(project.name)}</code> · {counts.get("tasks", 0)} tasks · '
             f"{counts.get('members', 0)} members</div></div>"
             f'<a class="btn btn-sm btn-outline-secondary" href="{self.url(request)}">← all projects</a></div>'
         )
@@ -1081,7 +1081,7 @@ class ProjectsView(_PageView):
             "members": self._members,
             "labels": self._labels,
             "instances": self._instances,
-            "frames": self._frames,
+            "tasks": self._tasks,
         }
         render = sections.get(tab, self._overview)
         return (
@@ -1122,8 +1122,8 @@ class ProjectsView(_PageView):
             f"<div><span class='text-muted'>directory</span> <code>{_e(root)}</code></div>"
             f"<div><span class='text-muted'>files</span> "
             f'<a href="{self.url(request, project=project.name, tab="files")}">browse</a></div>'
-            f"<div><span class='text-muted'>frames / members</span> "
-            f"{counts.get('frames', 0)} / {counts.get('members', 0)}</div>"
+            f"<div><span class='text-muted'>tasks / members</span> "
+            f"{counts.get('tasks', 0)} / {counts.get('members', 0)}</div>"
             f"<div><span class='text-muted'>created / updated</span> "
             f"{_e(project.created_at.strftime('%Y-%m-%d %H:%M') if project.created_at else '')} / "
             f"{_e(project.updated_at.strftime('%Y-%m-%d %H:%M') if project.updated_at else '')}</div>"
@@ -1137,7 +1137,7 @@ class ProjectsView(_PageView):
             f'<form method="post" action="{self.url(request, "/delete")}" '
             f"onsubmit=\"return confirm('Permanently delete project {_e(project.name)}?')\">{csrf}"
             f"<input type='hidden' name='project' value='{_e(project.name)}'>"
-            '<p class="text-muted mb-2">Removes the project from the registry (frames, annotations, '
+            '<p class="text-muted mb-2">Removes the project from the registry (tasks, annotations, '
             "history, labels and members) and, when the box is ticked, the whole directory "
             f"<code>{_e(root)}</code>. This cannot be undone.</p>"
             '<div class="row g-2 align-items-end">'
@@ -1157,7 +1157,7 @@ class ProjectsView(_PageView):
             "above (stored in <code>.zlabel/project.json</code>), so the display name can be renamed "
             "freely. Renaming the directory by hand requires "
             "<code>uv run python -m v2.cli migrate-anno-ids</code>. <strong>Timeline</strong> off "
-            "means the frames are single images: the task table keeps <code>group</code>/"
+            "means the tasks are single images: the task table keeps <code>group</code>/"
             "<code>day</code> empty (toggling recomputes the existing tasks).</p></div>"
             f'<div class="col-12" id="danger-zone">{_card("Danger zone", danger)}</div>'
         )
@@ -1487,7 +1487,7 @@ class ProjectsView(_PageView):
                 f"{' checked' if item['archived'] else ''}><span class='form-check-label'>archived</span></label>"
                 "</td>"
                 f'<td class="text-muted">{item["results"]}</td>'
-                f'<td class="text-muted">{item["frames"]}</td>'
+                f'<td class="text-muted">{item["tasks"]}</td>'
                 "<td>"
                 f'<input name="note-{number}" class="form-control form-control-sm" style="min-width:10rem" '
                 f'value="{_e(item["note"])}" placeholder="(optional)">'
@@ -1504,7 +1504,7 @@ class ProjectsView(_PageView):
                 f"<input type='hidden' name='number' value='{number}'></form>"
             )
         table = _table(
-            ["id", "name", "status", "colour", "", "results", "frames", "note", ""],
+            ["id", "name", "status", "colour", "", "results", "tasks", "note", ""],
             rows,
             "no instances yet - save an annotation that uses instance ids",
         )
@@ -1556,7 +1556,7 @@ class ProjectsView(_PageView):
             '<p class="text-muted mt-2">Instances are mirrored from the annotation documents '
             "(<code>results[*].instance_id</code> / <code>annotations.instances</code>); the "
             "<strong>id</strong> is the number the documents reference, so it cannot be "
-            "renumbered here. <strong>results</strong>/<strong>frames</strong> count the "
+            "renumbered here. <strong>results</strong>/<strong>tasks</strong> count the "
             "annotations currently linked to the instance. Removing a row only clears the "
             "registry - a later save that still uses the number recreates it.</p>"
         )
@@ -1567,14 +1567,14 @@ class ProjectsView(_PageView):
 
     # endregion
 
-    # region detail: frames
-    def _frames(self, request: Request, project_name: str) -> str:
+    # region detail: tasks
+    def _tasks(self, request: Request, project_name: str) -> str:
         state = str(request.query_params.get("state") or "")
         query = str(request.query_params.get("q") or "").strip()
         offset = max(0, int(str(request.query_params.get("offset") or 0) or 0))
         try:
             rows, total = self.services.tasks.list_tasks(
-                project_name, state=state or None, search=query or None, limit=FRAME_PAGE_SIZE, offset=offset
+                project_name, state=state or None, search=query or None, limit=TASK_PAGE_SIZE, offset=offset
             )
         except ApiError as e:
             return f'<p class="text-danger">{_e(e.message)}</p>'
@@ -1599,9 +1599,9 @@ class ProjectsView(_PageView):
                 "</tr>"
             )
         table = _table(
-            ["", "frame", "group", "day", "state", "version", "claimed by", "updated"],
+            ["", "task", "group", "day", "state", "version", "claimed by", "updated"],
             body,
-            "no frames match these filters",
+            "no tasks match these filters",
         )
         state_options = "".join(
             f'<option value="{item}"{" selected" if item == state else ""}>{item}</option>' for item in STATES
@@ -1609,35 +1609,35 @@ class ProjectsView(_PageView):
         filters = (
             f'<form method="get" action="{self.url(request)}" class="row g-2 align-items-end mb-3">'
             f'<input type="hidden" name="project" value="{_e(project_name)}">'
-            '<input type="hidden" name="tab" value="frames">'
+            '<input type="hidden" name="tab" value="tasks">'
             '<div class="col-auto"><label class="form-label">state</label>'
             f'<select name="state" class="form-select form-select-sm">'
             f'<option value=""{" selected" if not state else ""}>(any)</option>{state_options}</select></div>'
             '<div class="col-auto"><label class="form-label">search</label>'
             f'<input name="q" value="{_e(query)}" class="form-control form-control-sm" placeholder="path"></div>'
             '<div class="col-auto"><button class="btn btn-sm btn-outline-primary" type="submit">Filter</button> '
-            f'<a class="btn btn-sm btn-link" href="{self.url(request, project=project_name, tab="frames")}">reset</a>'
+            f'<a class="btn btn-sm btn-link" href="{self.url(request, project=project_name, tab="tasks")}">reset</a>'
             "</div></form>"
         )
         pages = ""
-        if total > FRAME_PAGE_SIZE:
+        if total > TASK_PAGE_SIZE:
             links = []
             if offset > 0:
                 links.append(
                     f'<a class="btn btn-sm btn-outline-secondary" href="'
-                    f'{self.url(request, project=project_name, tab="frames", state=state, q=query, offset=max(0, offset - FRAME_PAGE_SIZE))}">← newer</a>'
+                    f'{self.url(request, project=project_name, tab="tasks", state=state, q=query, offset=max(0, offset - TASK_PAGE_SIZE))}">← newer</a>'
                 )
-            if offset + FRAME_PAGE_SIZE < total:
+            if offset + TASK_PAGE_SIZE < total:
                 links.append(
                     f'<a class="btn btn-sm btn-outline-secondary" href="'
-                    f'{self.url(request, project=project_name, tab="frames", state=state, q=query, offset=offset + FRAME_PAGE_SIZE)}">older →</a>'
+                    f'{self.url(request, project=project_name, tab="tasks", state=state, q=query, offset=offset + TASK_PAGE_SIZE)}">older →</a>'
                 )
             pages = (
                 f'<div class="d-flex justify-content-between align-items-center mb-2">'
-                f'<span class="text-muted">{offset + 1}–{min(offset + FRAME_PAGE_SIZE, total)} of {total}</span>'
+                f'<span class="text-muted">{offset + 1}–{min(offset + TASK_PAGE_SIZE, total)} of {total}</span>'
                 f'<span class="d-flex gap-2">{"".join(links)}</span></div>'
             )
-        return f'<div class="col-12">{_card("Frames", filters + pages + table)}</div>'
+        return f'<div class="col-12">{_card("Tasks", filters + pages + table)}</div>'
 
     # endregion
 

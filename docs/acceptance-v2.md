@@ -9,19 +9,19 @@ cd .. && uv run pytest -q                        # 557 passed, 3 skipped
 cd zlabel_server && uv run pytest tests/v2/test_client_contract.py -q   # 12 项：客户端 ↔ 真实服务端
 ```
 
-## 1. 两人抢同一帧
+## 1. 两人抢同一任务
 - 自动化：`tests/v2/test_tasks.py::test_claim_then_conflict_for_the_second_annotator`、
   `tests/v2/test_client_contract.py::test_lease_expiry_and_takeover`、
-  `tests/gui/test_workflow.py::test_claim_conflict_locks_the_frame`
-- 手工：两个客户端（一个 reviewer/admin、一个 annotator）打开同一帧 → 后开者弹出
-  "该帧已被领取：<名字> / 租约到期 …"，三个按钮（只读查看 / 下一帧 / 接管）可用；该帧保持只读，
+  `tests/gui/test_workflow.py::test_claim_conflict_locks_the_task`
+- 手工：两个客户端（一个 reviewer/admin、一个 annotator）打开同一任务 → 后开者弹出
+  "该任务已被领取：<名字> / 租约到期 …"，三个按钮（只读查看 / 下一任务 / 接管）可用；该任务保持只读，
   Finish/Submit 禁用；把 `ZLSERVER_LEASE_MINUTES=1` 后等待租约过期 → 后者可直接领取。
 
-## 2. 推理只依赖本次请求的帧
-- 自动化：`tests/v2/test_inference_worker.py::test_same_frame_is_encoded_once`、
-  `::test_different_frames_are_encoded_separately`、`::test_results_follow_the_requested_frame`、
-  `tests/v2/test_predict.py::test_each_predict_sends_its_own_frame`
-- 手工：同一帧上连续点 3 次（第 2、3 次明显更快，`/metrics` 命中率上升）；交替预测两张不同的图，
+## 2. 推理只依赖本次请求的任务
+- 自动化：`tests/v2/test_inference_worker.py::test_same_task_is_encoded_once`、
+  `::test_different_tasks_are_encoded_separately`、`::test_results_follow_the_requested_task`、
+  `tests/v2/test_predict.py::test_each_predict_sends_its_own_task`
+- 手工：同一任务上连续点 3 次（第 2、3 次明显更快，`/metrics` 命中率上升）；交替预测两张不同的图，
   掩膜分别对应各自的图。
 
 ## 3. 角色与审计
@@ -43,7 +43,7 @@ cd zlabel_server && uv run pytest tests/v2/test_client_contract.py -q   # 12 项
 - 自动化：`tests/v2/test_tasks.py::test_progress_reflects_task_states`、
   `tests/v2/test_projects.py::test_progress_by_user`、
   `tests/v2/test_client_contract.py::test_claim_lease_and_review_roundtrip`（`my-stats`）
-- 手工：提交/复核几帧后，状态栏 `Done: approved/total` 与
+- 手工：提交/复核几个任务后，状态栏 `Done: approved/total` 与
   `GET /api/v2/projects/<p>/progress?by_user=true` 一致。
 
 ## 6. 推理进程故障隔离

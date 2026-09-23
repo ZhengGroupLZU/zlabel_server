@@ -32,7 +32,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
   target's sessions), **Projects** (list/filter/create; per-project detail tabs:
   overview with rename/metadata (display name, description, active, timeline), files with
   browse/upload/preview/download/delete,
-  members, labels, instances, frames with a state filter) and **Files** (the whole
+  members, labels, instances, tasks with a state filter) and **Files** (the whole
   storage
   root). Projects also has a **Danger zone** on the Overview tab: deleting requires
   typing the project name exactly and offers "also delete the files on disk"
@@ -49,7 +49,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
   table and a rescan button. The only remaining starlette-admin ``ModelView`` is the
   read-only **Audit log** (its actor is a plain ``actor`` string field - the ``users``
   table has no ModelView, and a relation field without a target view is rejected).
-  Frames/Labels/Members/Storage/Accounts no longer exist as separate pages.
+  Tasks/Labels/Members/Storage/Accounts no longer exist as separate pages.
   ``can_create``/``can_edit``/``can_delete`` must be **sync** methods - 1.x calls
   them without awaiting, so an ``async def`` override is always truthy (`v2/admin/`).
 - Admin REST (global `admin` role): `/api/v2/admin/users` (+ `/{id}`, `/{id}/password`),
@@ -200,7 +200,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
   `tests/v2/fakes.py` (`LocalBackendHarness`, `FakeInference`). The fixture that used
   to be called `ol` is `harness`; it seeds the real storage root.
 - **Timeline is per project**: `projects.timeline` (default on) decides whether the
-  scanner parses `group_name`/`day` from the frame path (`species/dish/D{n}.png`).
+  scanner parses `group_name`/`day` from the task path (`species/dish/D{n}.png`).
   With it off the tasks keep `""/0`, and toggling it in the admin UI (Projects ▸
   Overview, or `PATCH /projects/{p}` with `timeline`) recomputes every existing task
   in the same transaction. The desktop hides nothing yet — it just sees empty groups.
@@ -213,7 +213,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
   (and the `Predictor` wrappers) move the encoded image around; the worker caches
   them per `sha256(+crop)` and restores instead of re-encoding. If you add state to
   a runner (a new cached tensor), add it to that runner's `_state_fields` or the
-  restored frame silently produces wrong masks.
+  restored task image silently produces wrong masks.
 - `mode` quirks (inherited from the desktop): 1 SAM, 2 CV, 3 SAM|CV, 0 = "SAM & CV"
   (the value the client sends when both toggles are on). Only the rect path
   implements 0/3; the worker validates up front so clients get 422, not a 500.
@@ -242,6 +242,6 @@ in `docs/architecture-v2.md` (read it before structural changes).
 2. **Only `/api/v2`**; v1 is deleted; server and desktop ship together (no compat
    layer, no gradual rollout) — hence `GET /api/v2/health` version/capability checks.
 3. **Inference runs in a separate process**; embeddings cached by image sha256
-   (this fixes v1's "predict ran on whichever frame was loaded last" bug).
+   (this fixes v1's "predict ran on whichever task was loaded last" bug).
 4. **Claim + lease, then submit/review** (`force` and role checks for reviewers).
 5. **Fresh database, no v1 data migration** (old projects are not preserved).

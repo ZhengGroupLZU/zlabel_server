@@ -1,4 +1,4 @@
-"""Worker engine: per-frame embeddings, crop handling, queue and degradation."""
+"""Worker engine: per-task embeddings, crop handling, queue and degradation."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def engine() -> InferenceEngine:
 
 
 # region embedding cache
-def test_same_frame_is_encoded_once(engine):
+def test_same_task_is_encoded_once(engine):
     engine.run(job("a" * 64))
     engine.run(job("a" * 64))
     engine.run(job("a" * 64))
@@ -52,7 +52,7 @@ def test_same_frame_is_encoded_once(engine):
     assert engine.metrics.hit_rate == pytest.approx(2 / 3, abs=1e-4)
 
 
-def test_different_frames_are_encoded_separately(engine):
+def test_different_tasks_are_encoded_separately(engine):
     engine.run(job("a" * 64))
     engine.run(job("b" * 64))
     assert len(engine.predictor.encoded) == 2
@@ -78,8 +78,8 @@ def test_lru_eviction_re_encodes(engine):
     assert engine.metrics.cache_hits == 0
 
 
-def test_results_follow_the_requested_frame(engine):
-    """Two frames in a row: each result belongs to its own job."""
+def test_results_follow_the_requested_task(engine):
+    """Two tasks in a row: each result belongs to its own job."""
     first = engine.run(job("a" * 64, image=png_bytes((64, 96))))
     second = engine.run(job("b" * 64, image=png_bytes((32, 200))))
     assert first["anno_id"] == second["anno_id"] == "anno1"
@@ -91,7 +91,7 @@ def test_results_follow_the_requested_frame(engine):
 
 # region crop, pull, modes, queue
 def test_crop_box_shifts_prompts_and_results(engine):
-    crop = [10, 20, 50, 60]  # 40x40 inside the 64x96 frame
+    crop = [10, 20, 50, 60]  # 40x40 inside the 64x96 task
     engine.run(
         job("a" * 64, crop_box=crop, return_type=2, prompts={"points": [{"x": 30, "y": 40}], "labels": [1]})
     )
@@ -108,7 +108,7 @@ def test_crop_box_shifts_prompts_and_results(engine):
 
 def test_crop_is_part_of_the_cache_key(engine):
     engine.run(job("a" * 64, crop_box=[0, 0, 32, 32]))
-    engine.run(job("a" * 64))  # same frame, no crop -> must encode again
+    engine.run(job("a" * 64))  # same task, no crop -> must encode again
     assert len(engine.predictor.encoded) == 2
 
 

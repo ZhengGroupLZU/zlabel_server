@@ -17,7 +17,7 @@ from v2.db.base import Database
 from v2.services.container import Services
 
 
-def _seed_frame(root: Path, project: str = "projA") -> None:
+def _seed_task(root: Path, project: str = "projA") -> None:
     image = root / project / "images" / "D1.png"
     image.parent.mkdir(parents=True, exist_ok=True)
     image.write_bytes(b"png-bytes")
@@ -39,7 +39,7 @@ def _app(tmp_path):
 
 def test_startup_does_not_scan(tmp_path):
     """A dataset on disk stays invisible until somebody scans explicitly."""
-    _seed_frame(Path(tmp_path / "storage"))
+    _seed_task(Path(tmp_path / "storage"))
     app = _app(tmp_path)
 
     with TestClient(app) as client:
@@ -49,7 +49,7 @@ def test_startup_does_not_scan(tmp_path):
 
 
 def test_scan_endpoint_is_the_manual_trigger(tmp_path):
-    _seed_frame(Path(tmp_path / "storage"))
+    _seed_task(Path(tmp_path / "storage"))
     app = _app(tmp_path)
 
     with TestClient(app) as client:

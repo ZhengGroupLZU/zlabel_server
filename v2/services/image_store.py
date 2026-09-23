@@ -1,7 +1,7 @@
 """Content-addressed store for images uploaded by clients.
 
-Frames usually live in the storage tree, but a client working on a *local* dataset
-has to hand its frames to the server. Uploads land here keyed by sha256, which also gives
+Task images usually live in the storage tree, but a client working on a *local* dataset
+has to hand its task images to the server. Uploads land here keyed by sha256, which also gives
 the inference worker a stable identity to cache embeddings by (and lets the API
 reference an image the worker already has instead of re-sending it).
 """

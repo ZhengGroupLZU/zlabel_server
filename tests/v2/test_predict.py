@@ -1,4 +1,4 @@
-"""Stateless prediction: the job always carries its own frame."""
+"""Stateless prediction: the job always carries its own task."""
 
 from __future__ import annotations
 
@@ -35,14 +35,14 @@ def payload(anno_id: str, **extra) -> str:
     return json.dumps(body)
 
 
-def test_predict_with_an_uploaded_frame(client, auth_headers, harness, services):
+def test_predict_with_an_uploaded_task(client, auth_headers, harness, services):
     ctx = bootstrap(client, auth_headers, harness, services)
     first = ctx["items"][0]
 
     resp = client.post(
         PREDICT,
         data={"data": payload(first["anno_id"])},
-        files={"image": ("frame.png", b"frame-one")},
+        files={"image": ("task.png", b"task-one")},
         headers=ctx["headers"],
     )
     assert resp.status_code == 200, resp.text
@@ -50,13 +50,13 @@ def test_predict_with_an_uploaded_frame(client, auth_headers, harness, services)
 
     job = ctx["inference"].jobs[-1]
     assert job["anno_id"] == first["anno_id"]
-    assert base64.b64decode(job["image_b64"]) == b"frame-one"
+    assert base64.b64decode(job["image_b64"]) == b"task-one"
     assert job["prompts"]["points"] == [{"x": 10, "y": 20}]
     assert job["return_type"] == 2
 
 
-def test_each_predict_sends_its_own_frame(client, auth_headers, harness, services):
-    """The v1 bug was predicting on whichever frame was loaded last."""
+def test_each_predict_sends_its_own_task(client, auth_headers, harness, services):
+    """The v1 bug was predicting on whichever task was loaded last."""
     ctx = bootstrap(client, auth_headers, harness, services)
     first, second = ctx["items"][0], ctx["items"][1]
 
@@ -77,7 +77,7 @@ def test_each_predict_sends_its_own_frame(client, auth_headers, harness, service
     assert [job["anno_id"] for job in ctx["inference"].jobs] == [first["anno_id"], second["anno_id"]]
 
 
-def test_predict_can_pull_the_frame_from_storage(client, auth_headers, harness, services):
+def test_predict_can_pull_the_task_from_storage(client, auth_headers, harness, services):
     ctx = bootstrap(client, auth_headers, harness, services)
     resp = client.post(
         PREDICT,
@@ -91,8 +91,8 @@ def test_predict_can_pull_the_frame_from_storage(client, auth_headers, harness, 
 def test_predict_can_reuse_an_uploaded_digest(client, auth_headers, harness, services):
     ctx = bootstrap(client, auth_headers, harness, services)
     upload = client.put(
-        "/api/v2/projects/projA/images/local/frame.png",
-        files={"file": ("frame.png", b"cached-frame")},
+        "/api/v2/projects/projA/images/local/task.png",
+        files={"file": ("task.png", b"cached-task")},
         headers=ctx["headers"],
     )
     digest = upload.json()["sha256"]
@@ -124,7 +124,7 @@ def test_worker_unavailable_is_503(client, auth_headers, harness, services):
     resp = client.post(
         PREDICT,
         data={"data": payload(ctx["items"][0]["anno_id"])},
-        files={"image": ("frame.png", b"x")},
+        files={"image": ("task.png", b"x")},
         headers=ctx["headers"],
     )
     assert resp.status_code == 503 and resp.json()["code"] == "inference_unavailable"
@@ -140,7 +140,7 @@ def test_predict_can_delegate_the_image_pull(client, auth_headers, harness, serv
     resp = client.post(
         PREDICT,
         data={"data": payload(anno)},
-        files={"image": ("frame.png", b"pull-me")},
+        files={"image": ("task.png", b"pull-me")},
         headers=ctx["headers"],
     )
     assert resp.status_code == 200
@@ -148,7 +148,7 @@ def test_predict_can_delegate_the_image_pull(client, auth_headers, harness, serv
     assert job["image_b64"] is None
     assert job["image_url"] == f"/api/v2/internal/images/{job['image_sha256']}"
 
-    # the frame the worker would pull is really served by the internal endpoint
+    # the task the worker would pull is really served by the internal endpoint
     internal = client.get(job["image_url"], headers={"Authorization": "Bearer internal-secret"})
     assert internal.status_code == 200 and internal.content == b"pull-me"
 

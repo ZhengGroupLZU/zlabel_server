@@ -1,7 +1,7 @@
 """The encoded-image snapshot used by the serving cache must be complete.
 
 Restoring a snapshot has to reproduce the masks exactly: the worker relies on it
-instead of re-running the encoder for every prompt on the same frame.
+instead of re-running the encoder for every prompt on the same task.
 """
 
 from __future__ import annotations

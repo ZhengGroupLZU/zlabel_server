@@ -25,7 +25,7 @@ def list_instances(
     _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> list[InstanceOut]:
-    """The project's instances, ordered by number, with result/frame counts."""
+    """The project's instances, ordered by number, with result/task counts."""
     services.projects.require_access(_auth, project)
     return [
         InstanceOut(**item)
@@ -61,7 +61,7 @@ def instance_results(
     _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> list[InstanceResultOut]:
-    """The annotations that belong to one instance (frame + result + label)."""
+    """The annotations that belong to one instance (task + result + label)."""
     services.projects.require_access(_auth, project)
     return [InstanceResultOut(**item) for item in services.instances.results_of(project, number)]
 

@@ -208,7 +208,7 @@ def cmd_import_annotations(args) -> int:
     (``sha256("<project key>/<rel>")``, derived from each document's
     ``image_path``), and the DB is brought in step: annotation row (+ history
     copy), label registry and instance mirror. The project must be scanned first
-    (the frames are what create the tasks).
+    (the task images are what create the tasks).
     """
     settings, database, _, storage = _services(args)
     from v2.contracts.ids import anno_id_for
@@ -241,7 +241,7 @@ def cmd_import_annotations(args) -> int:
             continue
         if not storage.exists(storage.image_path(project.name, rel)):
             stats["no_image"] += 1
-            print(f"  {path.name}: no frame for {rel!r} (scan the project first)", file=sys.stderr)
+            print(f"  {path.name}: no task image for {rel!r} (scan the project first)", file=sys.stderr)
             continue
         target = storage.anno_path(project.name, anno_id_for(project.key, rel))
         if storage.exists(target) and not args.overwrite and storage.get_bytes(target) != content:
@@ -274,7 +274,7 @@ def cmd_import_annotations(args) -> int:
     print(
         f"{verb} {stats['imported']} document(s); {stats['repaired']} id-repair(s); "
         f"{stats['already']} already present; {stats['conflict']} conflict(s); "
-        f"{stats['no_image']} without a frame; {stats['unreadable']} unreadable"
+        f"{stats['no_image']} without a task image; {stats['unreadable']} unreadable"
     )
     if args.dry_run:
         print("dry run: nothing was written")

@@ -2,7 +2,7 @@
 
 Same wire shape as v1 (``data`` form field with the annotation JSON, optional
 image upload) so the desktop's existing response parsing keeps working, but the
-model lives in its own process and every request carries the frame it applies to.
+model lives in its own process and every request carries the task image it applies to.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _parse_job(data: str) -> dict[str, Any]:
 
 
 def _resolve_image(payload: dict, upload: UploadFile | None, services: Services) -> bytes:
-    """Uploaded bytes win, then the stored frame, then the upload cache."""
+    """Uploaded bytes win, then the stored task image, then the upload cache."""
     if upload is not None:
         return upload.file.read()
     rel_path = str(payload.get("rel_path") or "").strip()

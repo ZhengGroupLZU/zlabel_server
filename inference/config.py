@@ -37,7 +37,7 @@ class InferenceSettings(BaseSettings):
     # the worker requires it on /infer and presents it when pulling an image.
     # Env var: ZLSERVER_INFERENCE_TOKEN (empty = refuse to serve, dev must set it).
     inference_token: str = ""
-    # where the pull path fetches frames from (the API's /api/v2/internal/images)
+    # where the pull path fetches task images from (the API's /api/v2/internal/images)
     api_base_url: str = "http://127.0.0.1:8000"
     # embeddings are cached by image sha256; this bounds that cache
     embedding_cache_size: int = 32

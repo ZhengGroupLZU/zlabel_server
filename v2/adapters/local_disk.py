@@ -4,7 +4,7 @@ Layout (deliberately identical to the desktop's local dataset mode, so the same
 directory can be opened by the desktop as a dataset or served by the API):
 
     <ZLSERVER_STORAGE_ROOT>/<project>/                 # user's own structure
-        images/...                                     # frames, any nesting
+        images/...                                     # tasks, any nesting
         .zlabel/
             project.json                               # optional metadata
             annos/<anno_id>.zlabel                     # annotations

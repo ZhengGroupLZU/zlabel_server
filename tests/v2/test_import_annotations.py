@@ -145,7 +145,7 @@ def test_cli_import_annotations_rekeys_and_is_idempotent(tmp_path, monkeypatch):
     with database.session_scope() as session:
         assert session.scalar(select(func.count()).select_from(AnnotationVersion)) == 1
 
-    # a document whose frame is missing is reported, not imported
+    # a document whose task is missing is reported, not imported
     orphan = source / f"{legacy_anno_id_for('annos', 'images/ghost.png')}.zlabel"
     orphan.write_bytes(json.dumps({"image_path": "images/ghost.png"}).encode("utf-8"))
     assert main(args) == 0

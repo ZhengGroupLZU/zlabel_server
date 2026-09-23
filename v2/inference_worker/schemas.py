@@ -15,7 +15,7 @@ class Prompts(BaseModel):
 
 
 class InferJob(BaseModel):
-    """One stateless request: the frame (inline or pullable) + the prompt."""
+    """One stateless request: the task image (inline or pullable) + the prompt."""
 
     job_id: str = ""
     anno_id: str = ""

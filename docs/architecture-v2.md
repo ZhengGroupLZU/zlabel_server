@@ -7,7 +7,7 @@
 
 ## 1. 目标与非目标
 
-**目标**：把标注服务端从"单用户脚本式后端"升级为**多用户生产系统**：任务领取与租约、提交/复核状态机、角色权限与审计、按人统计、服务端标签管理、推理与 API 解耦（不再有"全局当前帧"），并且 HTTP 契约有版本、可灰度、可回滚。
+**目标**：把标注服务端从"单用户脚本式后端"升级为**多用户生产系统**：任务领取与租约、提交/复核状态机、角色权限与审计、按人统计、服务端标签管理、推理与 API 解耦（不再有"全局当前图"），并且 HTTP 契约有版本、可灰度、可回滚。
 
 **非目标（v2 不做）**：不做通用 Web 前端（只保留 `/admin` 运维后台）；不改桌面端的本地（离线）模式；不引入 Postgres/Redis 等外部中间件（保持单机可部署，但边界留好）。
 
@@ -19,7 +19,7 @@
 |---|---|---|
 | D1 | **服务端自己的账号 + 自己的存储树**：账号是 `users` 表的 scrypt 哈希，登录后签发自己的 session；数据集就是 `ZLSERVER_STORAGE_ROOT` 下的普通目录，标注写在 `<project>/.zlabel/annos/`（与桌面端数据集布局一致）。原设计"OpenList 作身份源 + 文件存储"已在 P6 被本方案取代 | 单机可部署、不依赖外部服务；与桌面端本地数据集可互换；角色/领取/审计能力保留在服务端 |
 | D2 | **只保留 `/api/v2`，v1 彻底删除** | 少维护一套适配代码；代价是没有灰度、服务端与桌面端必须一次性同步升级（见 §10、§12） |
-| D3 | **推理独立进程 + 队列** | 消除"全局当前帧"错帧 bug；API 重启不影响模型；GPU 排队不占 API worker；可水平扩 GPU |
+| D3 | **推理独立进程 + 队列** | 消除"全局当前图"错图 bug；API 重启不影响模型；GPU 排队不占 API worker；可水平扩 GPU |
 | D4 | **领取制 + 复核状态机** | 多人协作不撞车（租约自动过期）；复核可退回；进度按状态统计 |
 
 ## 3. 目录结构
@@ -140,12 +140,12 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 | `POST /api/v2/tasks/{anno_id}/claim\|release\|heartbeat` | session | 领取/释放/续租 |
 | `POST /api/v2/tasks/{anno_id}/submit` | 持有者 | 提交复核 |
 | `POST /api/v2/tasks/{anno_id}/review` | reviewer/admin | `{decision: approve\|reject, note}` |
-| `GET /api/v2/projects/{p}/groups` | session | 序列分组 + 帧列表（时间轴/拷贝上一帧用，服务端给全量，不受分页截断） |
+| `GET /api/v2/projects/{p}/groups` | session | 序列分组 + 任务列表（时间轴/拷贝上一任务用，服务端给全量，不受分页截断） |
 | `GET /api/v2/projects/{p}/my-stats` | session | 我名下各状态的任务数 |
 | `POST /api/v2/tasks/{anno_id}/reopen` | reviewer/admin | 已通过/已提交退回草稿（复核者改主意） |
 | `GET /api/v2/auth/users` · `PUT /api/v2/auth/users/{id}/role` | admin | 用户列表 / 改角色（改角色会撤销该用户会话） |
 | `GET /api/v2/projects/{p}/images/{rel_path:path}` | session | 取图（直接读存储树），支持 `ETag`/`If-None-Match`；**无副作用** |
-| `GET /api/v2/images/{sha256}` | session | 取回客户端上传过（内容寻址）的帧 |
+| `GET /api/v2/images/{sha256}` | session | 取回客户端上传过（内容寻址）的任务图像 |
 | `PUT /api/v2/projects/{p}/images/{rel_path:path}` | session | 本地上传（本地数据集 + 远端推理） |
 | `GET /api/v2/projects/{p}/annotations/{anno_id}` | session | 200 + `ETag: v{n}` / 404 = 未标注 |
 | `PUT /api/v2/projects/{p}/annotations/{anno_id}` | 持有者 | body 含 `base_version`；200 `{version}` / 409 冲突（`server_version, updated_by, updated_at`）/ `force=true` 仅 reviewer+ |
@@ -155,7 +155,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 
 错误码约定：`404 not_found`（未标注/未找到，客户端可安全新建）、`409 conflict`（版本冲突或任务被他人领取，`detail.claimed_by` 区分）、`502 upstream_error`（存储/推理进程失败）、`503 inference_unavailable`。
 
-后台管理：`/api/v2/admin/users`（建号/改角色/启停/改密）、`/api/v2/admin/storage`、`/api/v2/admin/files`；项目成员 `/api/v2/projects/{p}/members`；项目实例 `/api/v2/projects/{p}/instances`。Web 后台 `/admin`（Dashboard / Users / Projects / Files / Audit log）把这些写操作重新走服务层，审计与会话吊销与 API 一致；项目范围内的文件、成员、标签、实例、帧都在项目详情页（实例页：编号只读、其余字段一个 Save all 批量提交）。
+后台管理：`/api/v2/admin/users`（建号/改角色/启停/改密）、`/api/v2/admin/storage`、`/api/v2/admin/files`；项目成员 `/api/v2/projects/{p}/members`；项目实例 `/api/v2/projects/{p}/instances`。Web 后台 `/admin`（Dashboard / Users / Projects / Files / Audit log）把这些写操作重新走服务层，审计与会话吊销与 API 一致；项目范围内的文件、成员、标签、实例、任务都在项目详情页（实例页：编号只读、其余字段一个 Save all 批量提交）。
 
 ## 7. 鉴权与会话
 
@@ -177,9 +177,9 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 ```
 
 - job（API → worker，`POST /infer`，Bearer 内部 token）：`{job_id, anno_id, image_sha256, image_b64, model, prompts{points,labels,rects,texts}, threshold, mode, return_type, crop_box}`；同步等待（HTTP，超时 `ZLSERVER_INFERENCE_TIMEOUT`），worker 内部串行或按 GPU 并发。M3 可再加 `image_url` 拉取模式，避免大图重复上传。
-- **embedding 缓存 key = 图像 sha256（+ crop）**：runner 暴露 `export_image_state()/import_image_state()`，把编码结果（SAM 的 `image_embeddings`、SAM2 的 `image_embed/high_res_*`、SAM3 的 `img/pcs/pvs feats`）整体快照；命中时**直接恢复**而非重算（`EmbeddingCache`，LRU，`ZLSERVER_EMBEDDING_CACHE_SIZE`）。同一张图第二次点击零编码，且每个 job 只可能用自己那帧的编码。
+- **embedding 缓存 key = 图像 sha256（+ crop）**：runner 暴露 `export_image_state()/import_image_state()`，把编码结果（SAM 的 `image_embeddings`、SAM2 的 `image_embed/high_res_*`、SAM3 的 `img/pcs/pvs feats`）整体快照；命中时**直接恢复**而非重算（`EmbeddingCache`，LRU，`ZLSERVER_EMBEDDING_CACHE_SIZE`）。同一张图第二次点击零编码，且每个 job 只可能用自己那个任务的图像编码。
 - worker 暴露 `GET /health`（模型/设备/是否已加载/缓存与队列深度，无需鉴权）与 `GET /metrics`（jobs/errors/命中率/p50-p95/max/uptime，需内部 token）。
-- 取图两种方式：默认 `ZLSERVER_INFERENCE_INLINE_IMAGES=true` 随 job 内联；置 false 则 API 把帧写进内容寻址缓存并给 `image_url`，worker 在**缓存未命中时**才拉（`GET /api/v2/internal/images/{sha}`，内部 token 鉴权）。
+- 取图两种方式：默认 `ZLSERVER_INFERENCE_INLINE_IMAGES=true` 随 job 内联；置 false 则 API 把任务图像写进内容寻址缓存并给 `image_url`，worker 在**缓存未命中时**才拉（`GET /api/v2/internal/images/{sha}`，内部 token 鉴权）。
 - `mode` 校验前置（不再 500）：点提示只接受 1(SAM)/2(CV)，框提示接受 0/1/2/3，文本只接受 1；`mode=0` 是客户端"同时勾选 SAM+OpenCV"的历史值，按旧语义交给框路径。
 - 模型参数沿用 v1：`ZLSERVER_MODEL_NAME/DIR/BACKEND`、SAM3 conf/iou、轮廓后处理参数（与桌面端逐像素对齐的预处理逻辑保持不变）。
 - 降级：worker 不可达 → `503 inference_unavailable`，客户端提示"推理不可用，可继续手动标注"（不再 500）。
@@ -236,7 +236,7 @@ v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。
 
 ## 14. 验收标准（DoD）
 
-1. 两个标注员同时打开同一帧：第二个立刻拿到 409 + 持有者信息，UI 可等待/跳转；租约到期后可自动领取。
+1. 两个标注员同时打开同一任务：第二个立刻拿到 409 + 持有者信息，UI 可等待/跳转；租约到期后可自动领取。
 2. 一次推理调用只依赖它自己请求的那张图（同一会话内交替预测两张图，结果与单图预测一致）。
 3. `reviewer` 可复核退回，`annotator` 不能；越权返回 403 且写入审计。
 4. 版本冲突：客户端 A 保存后，B 用旧 `base_version` 保存 → 409 带服务端版本与作者；`force` 仅 reviewer+。
@@ -249,6 +249,6 @@ v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。
 
 - **账号丢失/遗忘密码**：服务端不保存明文，忘记密码只能由管理员在 `/admin/accounts` 重置（或 `uv run python -m v2.cli user passwd`）；没有自助找回。
 - **SQLite 写并发**：领取/提交是短事务，<50 人够用；上多副本需换 Postgres（仓库层已隔离，切换成本可控）。
-- **SAM3 显存**：vision arena ~7GB 不回收，worker 每帧建/销 session 的既有策略必须逐行保留。
+- **SAM3 显存**：vision arena ~7GB 不回收，worker 每个任务建/销 session 的既有策略必须逐行保留。
 - **无灰度能力**：`/api/v1` 已删除，服务端与桌面端必须同步发布；上线前要有停机窗口与“上一版 v2”的部署包。
 - **历史元数据不保留**：`.zlabel` 标注文件格式不变（历史标注可继续读取），但旧库里的领取/进度/标签元数据按决策丢弃。

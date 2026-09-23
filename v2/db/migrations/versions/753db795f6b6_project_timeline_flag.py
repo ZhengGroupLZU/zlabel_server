@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Upgrade schema."""
     # ``server_default`` first: projects that already exist keep the old behaviour
-    # (frame names were parsed for sequence groups). New rows get the same default.
+    # (task names were parsed for sequence groups). New rows get the same default.
     with op.batch_alter_table('projects', schema=None) as batch_op:
         batch_op.add_column(
             sa.Column('timeline', sa.Boolean(), nullable=False, server_default=sa.true())

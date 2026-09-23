@@ -49,7 +49,7 @@ def parse_instance_annotations(document: dict[str, Any]) -> dict[int, dict[str, 
 
     Reads the desktop's wire format: ``results`` is a mapping (or a list) of result
     documents carrying ``instance_id`` (``0`` = not part of an instance) and
-    ``labels[0].name``; ``instances`` maps a number to its per-frame status.
+    ``labels[0].name``; ``instances`` maps a number to its per-task status.
     """
     parsed: dict[int, dict[str, Any]] = {}
     results = document.get("results") or {}
@@ -198,7 +198,7 @@ class InstanceService:
         return [self._out(row, stats.get(row.id, {})) for row in rows]
 
     def results_of(self, project: str, number: int) -> list[dict[str, Any]]:
-        """The annotations belonging to one instance (frame + result + label)."""
+        """The annotations belonging to one instance (task + result + label)."""
         with self.db.session_scope() as session:
             instance = self._instance(session, project, number)
             rows = session.scalars(
@@ -386,7 +386,7 @@ class InstanceService:
             "color": instance.color or "#000000",
             "archived": bool(instance.archived),
             "results": int(stats.get("results", 0)),
-            "frames": int(stats.get("frames", 0)),
+            "tasks": int(stats.get("tasks", 0)),
             "created_at": instance.created_at,
             "updated_at": instance.updated_at,
         }
@@ -404,7 +404,7 @@ class InstanceService:
             .where(InstanceResult.instance_id.in_(instance_ids))
             .group_by(InstanceResult.instance_id)
         ).all()
-        return {int(iid): {"results": int(n), "frames": int(frames)} for iid, n, frames in rows}
+        return {int(iid): {"results": int(n), "tasks": int(tasks)} for iid, n, tasks in rows}
 
     def _project_id(self, session: OrmSession, name: str) -> int:
         project_id = session.scalar(select(Project.id).where(Project.name == name))

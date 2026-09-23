@@ -111,7 +111,7 @@ class Project(Base):
     key: Mapped[str] = mapped_column(String(64), unique=True, index=True, default="")
     display_name: Mapped[str] = mapped_column(String(255), default="")
     description: Mapped[str] = mapped_column(Text, default="")
-    #: whether the project's frames form sequences. When on, the scanner parses
+    #: whether the project's tasks form sequences. When on, the scanner parses
     #: ``group_name``/``day`` from the relative path (``species/dish/D{n}.png``);
     #: when off they stay empty (``""/0``) because the naming is not a timeline.
     #: Toggle it in the admin UI; changing it recomputes the existing tasks.

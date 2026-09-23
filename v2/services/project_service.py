@@ -215,7 +215,7 @@ class ProjectService:
     def migrate_anno_ids(self, project: str, *, dry_run: bool = False) -> dict[str, int]:
         """Re-key one project from the legacy ``md5(name/rel)`` ids to the sha256 ids.
 
-        Every file is located through the *frame path* it stores in
+        Every file is located through the *task path* it stores in
         ``image_path`` (or the task row's ``rel_path``), so directories that were
         renamed before the switch are migrated too. Existing targets are never
         overwritten; the DB rows (tasks, annotations, versions) are updated to
@@ -263,7 +263,7 @@ class ProjectService:
                 stats["tasks"] += 1
 
         # annotations whose task row is gone (or files dropped in by hand): the
-        # document names its frame, so they can be re-keyed all the same
+        # document names its task, so they can be re-keyed all the same
         for full in self.storage.glob_files(zlabel_dir):
             folder, _, name = full.rpartition("/")
             if folder != zlabel_dir or not name.endswith(".zlabel"):
@@ -416,13 +416,13 @@ class ProjectService:
             return project
 
     def project_stats(self) -> dict[str, dict[str, int]]:
-        """``{project name: {"frames": n, "members": m}}`` for the admin pages.
+        """``{project name: {"tasks": n, "members": m}}`` for the admin pages.
 
-        ``frames`` counts the non-missing tasks (what the client would list).
+        ``tasks`` counts the non-missing tasks (what the client would list).
         """
         with self.db.session_scope() as session:
             names = {int(pid): name for pid, name in session.execute(select(Project.id, Project.name)).all()}
-            frames = dict(
+            tasks = dict(
                 session.execute(
                     select(Task.project_id, func.count())
                     .where(Task.missing.is_(False))
@@ -435,7 +435,7 @@ class ProjectService:
                 ).all()
             )
         return {
-            name: {"frames": int(frames.get(pid, 0)), "members": int(members.get(pid, 0))}
+            name: {"tasks": int(tasks.get(pid, 0)), "members": int(members.get(pid, 0))}
             for pid, name in names.items()
         }
 
@@ -689,7 +689,7 @@ class ProjectService:
         """Get-or-create labels by name (annotation saves grow the registry).
 
         New labels get an unused palette colour (or ``default_label_color`` when the
-        deployment forces one), so a frame that introduces labels produces a
+        deployment forces one), so a task that introduces labels produces a
         readable, distinct legend instead of a wall of black.
         """
         found: list[Label] = []

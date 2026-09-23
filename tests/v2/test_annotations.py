@@ -34,7 +34,7 @@ def document(*labels: str, note: str = "") -> dict:
 
 
 def hand_over(client, admin_headers, bob_headers, anno) -> None:
-    """Release the frame as a reviewer, then let the second annotator claim it."""
+    """Release the task as a reviewer, then let the second annotator claim it."""
     assert client.post(f"/api/v2/tasks/{anno}/release", headers=admin_headers).status_code == 200
     assert client.post(f"/api/v2/tasks/{anno}/claim", headers=bob_headers).status_code == 200
 
@@ -108,7 +108,7 @@ def test_stale_base_version_conflicts(client, auth_headers, harness):
     put(client, headers["admin"], anno, document("Root"))  # v1 by rainy
     put(client, headers["admin"], anno, document("Root", "Shoot"), base_version=1)  # v2 by rainy
 
-    # bob edits based on v1 (the frame is handed over, so the claim is not the issue)
+    # bob edits based on v1 (the task is handed over, so the claim is not the issue)
     hand_over(client, headers["admin"], headers["bob"], anno)
     stale = put(client, headers["bob"], anno, document("Leaf"), base_version=1)
     assert stale.status_code == 409

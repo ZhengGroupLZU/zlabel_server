@@ -1,7 +1,7 @@
 """The web admin UI: cookie login, the page set and their write paths.
 
 Menu: Dashboard / Users / Projects / Files / Audit log. Project-scoped data
-(files, members, labels, frames) lives on the project detail page.
+(files, members, labels, tasks) lives on the project detail page.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def _png(size: tuple[int, int] = (32, 32)) -> bytes:
     return buffer.getvalue()
 
 
-def _seed_frame(client: TestClient, project: str, rel: str = "images/D1.png") -> None:
+def _seed_task(client: TestClient, project: str, rel: str = "images/D1.png") -> None:
     """Drop a real PNG into the storage tree and scan it into the task table."""
     root = Path(client.app.state.settings.storage_root) / project / rel
     root.parent.mkdir(parents=True, exist_ok=True)
@@ -133,7 +133,7 @@ def test_dashboard_shows_storage_and_projects(admin_client):
     assert dashboard.status_code == 200
     # our own cards, not starlette-admin's default index
     assert 'text-muted">Projects' in dashboard.text
-    assert 'text-muted">Frames' in dashboard.text
+    assert 'text-muted">Tasks' in dashboard.text
     assert "Storage" in dashboard.text
     assert "Rescan storage" in dashboard.text
     assert "projA" in dashboard.text and "Project A" in dashboard.text
@@ -145,7 +145,7 @@ def test_menu_keeps_the_expected_pages(admin_client):
     for label in ("Dashboard", "Users", "Projects", "Files", "Audit log"):
         assert f'class="nav-link-title">{label}</span>' in page, label
     # the old per-table pages are gone from the menu
-    for removed in ("Frames", "Labels", "Members", "Storage", "Accounts"):
+    for removed in ("Tasks", "Labels", "Members", "Storage", "Accounts"):
         assert f'class="nav-link-title">{removed}</span>' not in page, removed
 
 
@@ -297,7 +297,7 @@ def test_projects_page_creates_filters_and_updates(admin_client):
     assert project.timeline is False
     assert _audit(admin_client, "update_project")
 
-    # turning the timeline on parses the existing frames right away
+    # turning the timeline on parses the existing tasks right away
     rel = "sp/dish/D1.png"
     image = Path(admin_client.app.state.settings.storage_root) / "projA" / rel
     image.parent.mkdir(parents=True, exist_ok=True)
@@ -330,8 +330,8 @@ def test_projects_page_creates_filters_and_updates(admin_client):
 def test_project_detail_tabs_render(admin_client):
     login(admin_client)
     admin_client.app.state.services.projects.create_project("projA", "Project A", actor_id=1)
-    _seed_frame(admin_client, "projA")
-    for tab in ("overview", "files", "members", "labels", "frames", "instances"):
+    _seed_task(admin_client, "projA")
+    for tab in ("overview", "files", "members", "labels", "tasks", "instances"):
         page = admin_client.get("/admin/projects", params={"project": "projA", "tab": tab})
         assert page.status_code == 200, tab
     assert "images" in admin_client.get("/admin/projects", params={"project": "projA", "tab": "files"}).text
@@ -343,7 +343,7 @@ def test_project_detail_tabs_render(admin_client):
     )
     assert (
         "images/D1.png"
-        in admin_client.get("/admin/projects", params={"project": "projA", "tab": "frames"}).text
+        in admin_client.get("/admin/projects", params={"project": "projA", "tab": "tasks"}).text
     )
     # an unknown project goes back to the list with a flash, not a 500
     missing = admin_client.get("/admin/projects", params={"project": "nope"})
@@ -568,7 +568,7 @@ def test_refresh_buttons_post_to_real_urls(admin_client):
     assert "Refresh projects" in listing and "manual only" in listing
     assert "/admin//" not in listing
 
-    # the refresh button really scans: a frame dropped in afterwards is picked up
+    # the refresh button really scans: a task dropped in afterwards is picked up
     root = Path(admin_client.app.state.settings.storage_root) / "projA" / "images"
     root.mkdir(parents=True, exist_ok=True)
     (root / "D2.png").write_bytes(b"png-bytes")
@@ -588,7 +588,7 @@ def test_project_delete_needs_the_typed_name(admin_client):
     login(admin_client)
     services = admin_client.app.state.services
     services.projects.create_project("projA", actor_id=1)
-    _seed_frame(admin_client, "projA")
+    _seed_task(admin_client, "projA")
 
     page = admin_client.get("/admin/projects", params={"project": "projA", "tab": "overview"})
     assert 'id="danger-zone"' in page.text and "Delete project" in page.text
@@ -729,17 +729,17 @@ def test_instance_tab_lists_saves_creates_and_deletes(admin_client):
     assert duplicate.status_code == 200 and "already exists" in duplicate.text
 
 
-def test_project_frames_filter(admin_client):
+def test_project_tasks_filter(admin_client):
     login(admin_client)
     admin_client.app.state.services.projects.create_project("projA", actor_id=1)
-    _seed_frame(admin_client, "projA")
+    _seed_task(admin_client, "projA")
 
-    frames = admin_client.get("/admin/projects", params={"project": "projA", "tab": "frames"})
-    assert "images/D1.png" in frames.text and "draft" in frames.text
+    tasks = admin_client.get("/admin/projects", params={"project": "projA", "tab": "tasks"})
+    assert "images/D1.png" in tasks.text and "draft" in tasks.text
     approved = admin_client.get(
-        "/admin/projects", params={"project": "projA", "tab": "frames", "state": "approved"}
+        "/admin/projects", params={"project": "projA", "tab": "tasks", "state": "approved"}
     )
-    assert "no frames match" in approved.text
+    assert "no tasks match" in approved.text
 
 
 # endregion

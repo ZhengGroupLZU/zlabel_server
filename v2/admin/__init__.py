@@ -8,7 +8,7 @@ rows and session revocation behave identically whichever surface an admin uses.
     /admin/users           accounts: filter, create, role/enabled, password reset
     /admin/projects        projects: filter/create; per-project overview (rename,
                            metadata), files (browse/upload/preview), members,
-                           labels and frames
+                           labels and tasks
     /admin/files           global storage browser
     /admin/audit-log       read-only audit trail
 """

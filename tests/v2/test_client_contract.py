@@ -233,10 +233,10 @@ def test_predict_contract(api, harness, services):
     services.inference = fake
     from PIL import Image
 
-    frame = Image.new("RGB", (32, 32), (1, 2, 3))
+    task = Image.new("RGB", (32, 32), (1, 2, 3))
     result = api.predict(
         anno_id,
-        image=frame,
+        image=task,
         project=PROJ,
         points=[{"x": 5.0, "y": 6.0}],
         labels=[1.0],
@@ -250,7 +250,7 @@ def test_predict_contract(api, harness, services):
     assert job["mode"] == 1 and job["return_type"] == 2
     assert job["image_sha256"] and job["image_b64"]
 
-    # server-side frames are referenced, not re-uploaded
+    # server-side tasks are referenced, not re-uploaded
     api.predict(anno_id, project=PROJ, rel_path="images/dish01/D1.png", points=[{"x": 1.0, "y": 2.0}])
     assert fake.jobs[-1]["image_b64"]
 
@@ -262,7 +262,7 @@ def test_logout_revokes_the_session(api):
     assert api.get_projects() is None  # 401 -> treated as "server refused"
 
 
-def test_frame_calls_do_not_use_the_control_timeout(api, harness, client, client_api, monkeypatch):
+def test_task_calls_do_not_use_the_control_timeout(api, harness, client, client_api, monkeypatch):
     """Images/predict stay unbounded; control calls keep the 10s timeout."""
     routed = _RequestsToTestClient(client)
     monkeypatch.setattr(client_api, "requests", routed)
@@ -277,8 +277,8 @@ def test_frame_calls_do_not_use_the_control_timeout(api, harness, client, client
     assert routed.timeouts[-1][2] is None
 
 
-def _ready_frame(api, harness, tmp_path) -> tuple[str, str]:
-    """One project + one frame with a saved annotation; returns (anno_id, document path)."""
+def _ready_task(api, harness, tmp_path) -> tuple[str, str]:
+    """One project + one task with a saved annotation; returns (anno_id, document path)."""
     seed(harness, PROJ, files=("images/dish01/D1.png",))
     api.scan(PROJ)
     anno_id = api.get_tasks(PROJ)["items"][0]["anno_id"]
@@ -296,9 +296,9 @@ def test_claim_lease_and_review_roundtrip(api, harness, client_api, tmp_path):
     assert reviewer.login("bob", "pw-padding"), reviewer.last_login_error
     assert reviewer.role == "annotator"  # only the first account is admin
 
-    anno_id, document = _ready_frame(api, harness, tmp_path)
+    anno_id, document = _ready_task(api, harness, tmp_path)
 
-    # the frame carries the annotator's lease; a second client is refused with detail
+    # the task carries the annotator's lease; a second client is refused with detail
     claim = api.claim(anno_id)
     assert claim.ok and claim.task["claimed_by"] == "rainy"
     assert claim.task["lease_expires_at"]
@@ -337,7 +337,7 @@ def test_claim_lease_and_review_roundtrip(api, harness, client_api, tmp_path):
 def test_version_history_contract(api, harness, tmp_path):
     """Every save is listed, and an old document can be fetched back."""
     _login(api)
-    anno_id, document = _ready_frame(api, harness, tmp_path)
+    anno_id, document = _ready_task(api, harness, tmp_path)
     assert api.save_zlabel(document, project=PROJ).ok  # v2
     assert api.save_zlabel(document, project=PROJ).ok  # v3
 
@@ -353,9 +353,9 @@ def test_version_history_contract(api, harness, tmp_path):
 
 
 def test_lease_expiry_and_takeover(client, api, harness, client_api, tmp_path):
-    """Two desktop clients, one frame: the loser is told, not silently overwritten.
+    """Two desktop clients, one task: the loser is told, not silently overwritten.
 
-    This is the flow the GUI drives: open a frame -> lease -> work; a lease that
+    This is the flow the GUI drives: open a task -> lease -> work; a lease that
     lapses can be taken over, and the original holder's save is refused with the
     holder details so the client can re-claim or go read-only.
     """
@@ -370,7 +370,7 @@ def test_lease_expiry_and_takeover(client, api, harness, client_api, tmp_path):
     second = client_api.ZLServerApiClient("bob", "pw-padding", api.sam_api)
     assert second.login("bob", "pw-padding"), second.last_login_error
 
-    anno_id, document = _ready_frame(api, harness, tmp_path)
+    anno_id, document = _ready_task(api, harness, tmp_path)
     assert api.claim(anno_id).ok
 
     # the first client's lease lapses (the server TTL is ZLSERVER_LEASE_MINUTES)
@@ -380,7 +380,7 @@ def test_lease_expiry_and_takeover(client, api, harness, client_api, tmp_path):
         task.lease_expires_at = utcnow() - timedelta(minutes=1)
     assert api.heartbeat(anno_id).status == 409  # no live lease to renew any more
 
-    # the second annotator picks the frame up and saves
+    # the second annotator picks the task up and saves
     taken = second.claim(anno_id)
     assert taken.ok and taken.task["claimed_by"] == "bob"
     assert second.save_zlabel(document, project=PROJ).ok

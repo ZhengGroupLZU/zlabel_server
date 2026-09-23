@@ -1,6 +1,6 @@
-"""``/api/v2/projects/{project}/images/{rel_path}`` — frames, with HTTP caching.
+"""``/api/v2/projects/{project}/images/{rel_path}`` — task images, with HTTP caching.
 
-Reading a frame is side-effect free (v1 used it to warm the model, which is how
+Reading a task image is side-effect free (v1 used it to warm the model, which is how
 predictions ended up running on the wrong embedding).
 """
 
@@ -35,7 +35,7 @@ def get_image(
     _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> Response:
-    """``ETag`` + ``If-None-Match`` friendly; 404 when the frame is gone."""
+    """``ETag`` + ``If-None-Match`` friendly; 404 when the task image is gone."""
     services.projects.get_project(project)
     path = services.storage.image_path(project, rel_path)
     info = services.storage.file_info(path)
@@ -55,7 +55,7 @@ async def upload_image(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> dict:
-    """Store a frame the client owns (local dataset + remote inference).
+    """Store a task image the client owns (local dataset + remote inference).
 
     Returns its ``sha256``: later ``predict`` calls may reference the image by
     that digest instead of re-uploading the bytes.
@@ -77,7 +77,7 @@ def get_uploaded_image(
     _auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> Response:
-    """Serve a previously uploaded frame (the inference worker pulls them here)."""
+    """Serve a previously uploaded task image (the inference worker pulls them here)."""
     content = services.images.get(digest)
     return Response(
         content=content,

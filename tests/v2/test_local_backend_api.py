@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def seed_image(root: Path, project: str, rel: str) -> Path:
-    """Drop a frame straight into the storage tree."""
+    """Drop a task straight into the storage tree."""
     path = root / project / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"png-bytes")
@@ -107,7 +107,7 @@ def test_creating_a_project_prepares_the_directory(local_client, local_settings,
     project_dir = Path(local_settings.storage_root) / "fresh"
     assert project_dir.is_dir()
 
-    # a project without frames is still listed (every top-level directory counts)
+    # a project without tasks is still listed (every top-level directory counts)
     local_client.post("/api/v2/projects/scan", headers=headers)
     assert "fresh" in {p["name"] for p in local_client.get("/api/v2/projects", headers=headers).json()}
 

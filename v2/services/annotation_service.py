@@ -100,7 +100,7 @@ class AnnotationService:
 
     # region reads
     def get(self, project: str, anno_id: str) -> tuple[bytes, int]:
-        """Current document + version; 404 when this frame is not annotated yet."""
+        """Current document + version; 404 when this task is not annotated yet."""
         content = self.storage.get_bytes(self.storage.anno_path(project, anno_id))
         with self.db.session_scope() as session:
             row = session.scalar(select(Annotation).where(Annotation.anno_id == anno_id))
@@ -198,7 +198,7 @@ class AnnotationService:
             # keep the instance registry / links in step with the document
             self.instances.sync_document(session, project_id=task.project_id, task=task, document=document)
             if task.state == STATE_REJECTED and not force:
-                task.state = STATE_DRAFT  # the annotator is reworking a rejected frame
+                task.state = STATE_DRAFT  # the annotator is reworking a rejected task
             self.tasks.renew_lease(session, task, auth.user_id)
             task.updated_at = utcnow()
 
@@ -257,7 +257,7 @@ class AnnotationService:
         current document and its history copy are written, then the DB is brought
         in step: annotation row (a fresh version when the content is new, no-op
         when it was imported already), label registry and instance mirror.
-        ``state`` can mark the frame as already reviewed (``approved``) for legacy
+        ``state`` can mark the task as already reviewed (``approved``) for legacy
         datasets that were finished before the server existed.
         """
         with self.db.session_scope() as session:

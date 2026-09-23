@@ -61,13 +61,13 @@ def list_groups(
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> list[GroupOut]:
-    """Sequence groups with their frames (the client's timeline source)."""
+    """Sequence groups with their tasks (the client's timeline source)."""
     services.projects.get_project(project, auth=auth)
     groups = services.tasks.groups(
         project, state=state, user_id=auth.user_id, claim="mine" if mine else claim
     )
     return [
-        GroupOut(group=g["group"], count=g["count"], frames=[TaskOut.of(row) for row in g["frames"]])
+        GroupOut(group=g["group"], count=g["count"], tasks=[TaskOut.of(row) for row in g["tasks"]])
         for g in groups
     ]
 

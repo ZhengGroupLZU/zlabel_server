@@ -62,14 +62,14 @@ def test_list_tasks_filters_and_pagination(client, auth_headers, harness):
     assert bad.status_code == 422 and bad.json()["code"] == "validation_error"
 
 
-def test_groups_endpoint_returns_frames_per_sequence(client, auth_headers, harness):
+def test_groups_endpoint_returns_tasks_per_sequence(client, auth_headers, harness):
     headers = bootstrap(
         client, auth_headers, harness, files=("species/dish/D1.png", "species/dish/D2.png", "loose.png")
     )
     groups = client.get("/api/v2/projects/projA/groups", headers=headers["admin"]).json()
     by_name = {g["group"]: g for g in groups}
     assert by_name["species/dish"]["count"] == 2
-    assert [f["day"] for f in by_name["species/dish"]["frames"]] == [1, 2]
+    assert [f["day"] for f in by_name["species/dish"]["tasks"]] == [1, 2]
     assert by_name[""]["count"] == 1
 
 
@@ -203,7 +203,7 @@ def test_review_requires_a_reviewer_and_a_note_on_reject(client, auth_headers, h
         == 409
     )
 
-    # a rejected frame is free to pick up again
+    # a rejected task is free to pick up again
     again = client.post(f"/api/v2/tasks/{anno}/claim", headers=headers["bob"])
     assert again.status_code == 200 and again.json()["state"] == "rejected"
 

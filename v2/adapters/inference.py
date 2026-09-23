@@ -2,7 +2,7 @@
 
 The API never loads a model: it sends a job (image + prompts) and returns the
 worker's :class:`SamReturn` payload. That is what removes v1's "predict ran on
-whichever frame was loaded last" bug — every job carries its own image.
+whichever task was loaded last" bug — every job carries its own image.
 
 The job contract is documented in ``docs/architecture-v2.md`` §8.
 """
