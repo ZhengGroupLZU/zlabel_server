@@ -27,7 +27,7 @@ COPY ./alembic.ini /app/alembic.ini
 COPY ./app /app/app
 COPY ./inference /app/inference
 
-RUN uv sync
+RUN uv sync --no-dev
 
 EXPOSE 8000
 

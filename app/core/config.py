@@ -77,7 +77,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="ZLSERVER_",
-        env_file=".env.v2",
+        env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
