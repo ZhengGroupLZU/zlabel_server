@@ -1,7 +1,13 @@
 services:
   zlabel_server:
-    user: "${ZLABEL_UID}:${ZLABEL_GID}"
-    
+    # `user:` is deliberately left commented out: entrypoint.sh starts as root,
+    # repairs the ownership of ./data and only then drops to
+    # ${ZLABEL_UID:-0}:${ZLABEL_GID:-0}. A `user:` here takes CAP_CHOWN away, so
+    # the entrypoint could only *report* a root-owned dataset instead of fixing
+    # it. Uncomment for "no root process at all" and fix ownership once on the
+    # host instead:
+    #   sudo chown -R "$(id -u):$(id -g)" data
+    # user: "${ZLABEL_UID:-0}:${ZLABEL_GID:-0}"
     build:
       context: .
     ports:
@@ -12,9 +18,15 @@ services:
     env_file:
       - .env.v2
     environment:
-      - HOME=/tmp
-      - UV_CACHE_DIR=/tmp/uv-cache
-      - UV_NO_SYNC=1
+      # who the API runs as. Export them before `docker compose up`:
+      #   export ZLABEL_UID=$(id -u) ZLABEL_GID=$(id -g)
+      - ZLABEL_UID=${ZLABEL_UID:-0}
+      - ZLABEL_GID=${ZLABEL_GID:-0}
+      # auto = repair ./data when its storage root belongs to another uid;
+      # `always` after somebody used sudo on the mount, `never` on NFS
+      - ZLABEL_CHOWN=${ZLABEL_CHOWN:-auto}
+      # the API owns the schema; the worker service must keep this at 0
+      - ZLABEL_MIGRATE=1
       # ZLabel server
       - ZLSERVER_DATABASE_URL=sqlite+pysqlite:///./data/zlabel_server_v2.db
       - ZLSERVER_UPLOAD_DIR=/app/data/uploads
@@ -22,8 +34,7 @@ services:
       - ZLSERVER_STORAGE_ROOT=/app/data/storage
       # first-run admin (only created when the account does not exist yet)
       - ZLSERVER_PROJECT_ACCESS_MODE=open
-      - ZLSERVER_BOOTSTRAP_ADMIN=admin
-      - ZLSERVER_BOOTSTRAP_PASSWORD=<change-me>
+      # - ZLSERVER_BOOTSTRAP_ADMIN=admin
       # the inference worker (separate service; see below / M3)
       - ZLSERVER_INFERENCE_URL=http://zlabel_inference:8001
       - ZLSERVER_INFERENCE_TIMEOUT=180
@@ -32,7 +43,6 @@ services:
       # web administration UI
       - ZLSERVER_ADMIN_ENABLED=true
       - ZLSERVER_ADMIN_PATH=/admin
-      - ZLSERVER_SECRET_KEY=<change-me>
     networks:
       zlabel_server_network:
         ipv4_address: 172.20.0.2
@@ -41,19 +51,20 @@ services:
   # Inference worker: same image, worker entrypoint, owns the GPU. Because the
   # model lives here, restarting the API never reloads it.
   zlabel_inference:
-    user: "${ZLABEL_UID}:${ZLABEL_GID}"
+    # same entrypoint and privilege drop as the API (see the note above)
     build:
       context: .
-    command: ["sh", "-c", "uv run fastapi run app/inference_worker/main.py --host 0.0.0.0 --port 8001"]
+    command: ["/app/.venv/bin/fastapi", "run", "app/inference_worker/main.py", "--host", "0.0.0.0", "--port", "8001"]
     environment:
-      - HOME=/tmp
-      - UV_CACHE_DIR=/tmp/uv-cache
-      - UV_NO_SYNC=1
+      - ZLABEL_UID=${ZLABEL_UID:-0}
+      - ZLABEL_GID=${ZLABEL_GID:-0}
+      # no ./data mount here: nothing to repair, nothing to migrate
+      - ZLABEL_CHOWN=never
+      - ZLABEL_MIGRATE=0
       - ZLSERVER_MODEL_NAME=SlimSAM   # EdgeSAM SAM SlimSAM SAM2 SAM3
       - ZLSERVER_MODEL_DIR=/app/assets/onnx
       - ZLSERVER_ORT_BACKEND=CUDA     # CPU CUDA (falls back to CPU if unavailable)
       - ZLSERVER_ORT_THREADS=8
-      - ZLSERVER_INFERENCE_TOKEN=<change-me>
       - ZLSERVER_API_BASE_URL=http://zlabel_server:8000
       - ZLSERVER_EMBEDDING_CACHE_SIZE=8
       - ZLSERVER_MAX_CONCURRENCY=1

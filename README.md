@@ -47,6 +47,38 @@ uv run pytest -m gpu           # CPU/CUDA parity (needs a working CUDA stack)
 uv run ruff check . && uv run ruff format .
 ```
 
+## Docker
+
+```console
+export ZLABEL_UID=$(id -u) ZLABEL_GID=$(id -g)   # who ./data should belong to
+docker compose build
+docker compose up -d          # API on :8000, inference worker on :8001 (internal)
+docker compose logs -f zlabel_server
+```
+
+`./data` (database, datasets, uploads) and `./assets/onnx` are mounted, never baked
+into the image; the image only carries the code. `entrypoint.sh` does what the image
+cannot do alone — repair the ownership of the bind mount, drop privileges, migrate:
+
+| variable | default | meaning |
+|---|---|---|
+| `ZLABEL_UID` / `ZLABEL_GID` | `0` (root) | start as root, repair `./data`, then run the services as this uid:gid |
+| `ZLABEL_CHOWN` | `auto` | `auto` repairs only when the storage root belongs to another uid, `always` walks `./data` on every start, `never` skips it (NFS / read-only mounts) |
+| `ZLABEL_MIGRATE` | `0` | `1` runs `alembic upgrade head` first; the API service sets it, the worker must leave it at 0 |
+| `ZLABEL_UMASK` | `022` | use `002` when several operators share the mount |
+
+Notes:
+
+- `docker compose exec` bypasses the entrypoint. With `ZLABEL_UID` set, run admin
+  commands as that user so they do not create root-owned files:
+  `docker compose exec -u "$ZLABEL_UID:$ZLABEL_GID" zlabel_server uv run python -m app.cli user ls`
+- Only `:8000` is published. Put TLS or a VPN in front of it — the session token and
+  the `/admin` cookie are bearer credentials, and the defaults in `docker-compose.yml`
+  (`<change-me>`) are placeholders: set `ZLSERVER_BOOTSTRAP_PASSWORD`,
+  `ZLSERVER_SECRET_KEY` and `ZLSERVER_INFERENCE_TOKEN` before exposing the service.
+- Datasets go into `./data/storage/<project>/…`; scanning is manual (Dashboard ▸
+  Rescan storage, or `POST /api/v2/projects/{p}/scan`).
+
 ## Notes
 
 - `GET /api/v2/health` reports capabilities; the client uses it to gate claim/

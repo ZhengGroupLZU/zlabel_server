@@ -1,13 +1,24 @@
+# Build context only: the Dockerfile COPYs .python-version, pyproject.toml,
+# uv.lock, alembic.ini, app/, inference/ and entrypoint.sh. Everything below is
+# either huge (datasets, ONNX models) or runtime state that compose mounts in.
 .git
 .venv
-__pycache__
 .vscode
 notebooks
+
+# datasets + models + local config: mounted as volumes, never baked in
 data
 assets
+.env*
+
+# tests/docs/caches
 tests
 docs
+__pycache__
 .pytest_cache
 .ruff_cache
+
+# local databases and model weights
 *.db
 *.onnx
+*.mnn

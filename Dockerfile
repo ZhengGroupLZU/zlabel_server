@@ -26,11 +26,23 @@ COPY ./uv.lock /app/uv.lock
 COPY ./alembic.ini /app/alembic.ini
 COPY ./app /app/app
 COPY ./inference /app/inference
+COPY ./entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 RUN uv sync --no-dev
 
+# Runtime environment for the entrypoint *and* for `docker exec` / `docker
+# compose run`, which do not go through it: the runtime uid has no passwd entry
+# (so HOME would be unresolvable) and uv must never try to re-sync the
+# root-owned venv.
+ENV HOME=/tmp \
+    UV_CACHE_DIR=/tmp/uv-cache \
+    UV_NO_SYNC=1
+
 EXPOSE 8000
 
-# Apply migrations, then serve the API. The inference worker runs as its own
-# service (see docker-compose.yml) so model reloads never restart the API.
-CMD ["sh", "-c", "uv run alembic upgrade head && uv run fastapi run app/main.py --host 0.0.0.0 --port 8000 --workers 1"]
+# Ownership repair, privilege drop (ZLABEL_UID/ZLABEL_GID) and `alembic upgrade
+# head` (ZLABEL_MIGRATE) live in the entrypoint; the inference worker service
+# overrides CMD (see docker-compose.yml).
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["/app/.venv/bin/fastapi", "run", "app/main.py", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
