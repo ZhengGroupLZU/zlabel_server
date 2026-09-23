@@ -29,7 +29,14 @@ COPY ./inference /app/inference
 COPY ./entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-RUN uv sync --no-dev
+# Keep the uv-managed CPython out of /root/.local/share/uv: the entrypoint drops
+# to an arbitrary host uid (ZLABEL_UID) which cannot traverse /root (mode 0700),
+# and a venv whose pyvenv.cfg `home =` points there starts and then dies with
+# "Fatal Python error: Failed to import encodings module".
+ENV UV_PYTHON_INSTALL_DIR=/opt/python
+
+RUN uv sync --no-dev \
+ && chmod -R a+rX /opt/python /app/.venv
 
 # Runtime environment for the entrypoint *and* for `docker exec` / `docker
 # compose run`, which do not go through it: the runtime uid has no passwd entry

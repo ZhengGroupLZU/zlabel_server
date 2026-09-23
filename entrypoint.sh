@@ -94,24 +94,48 @@ prepare_data() {
 }
 
 # --- privilege drop ------------------------------------------------------
-drop_privileges() {
+# The runtime uid has no passwd entry, so the services are exec'd through
+# gosu/setpriv/su-exec (whichever the image ships). $DROPPER is that command as
+# an unquoted word list; empty means "stay as we are" (root).
+DROPPER=""
+
+resolve_dropper() {
     if [ "$RUNTIME_UID" = "0" ]; then
         log "ZLABEL_UID unset: running as root (files in ./data stay root-owned)"
-        exec "$@"
+        return 0
     fi
-    for tool in gosu setpriv su-exec; do
-        if ! command -v "$tool" >/dev/null 2>&1; then
-            continue
-        fi
-        log "running as $RUNTIME_UID:$RUNTIME_GID (via $tool)"
-        case "$tool" in
-            gosu) exec gosu "$RUNTIME_UID:$RUNTIME_GID" "$@" ;;
-            setpriv) exec setpriv --reuid "$RUNTIME_UID" --regid "$RUNTIME_GID" --clear-groups "$@" ;;
-            su-exec) exec su-exec "$RUNTIME_UID:$RUNTIME_GID" "$@" ;;
-        esac
-    done
-    log "ERROR: no gosu/setpriv/su-exec in the image: cannot drop privileges, staying root"
-    exec "$@"
+    if command -v gosu >/dev/null 2>&1; then
+        DROPPER="gosu $RUNTIME_UID:$RUNTIME_GID"
+    elif command -v setpriv >/dev/null 2>&1; then
+        DROPPER="setpriv --reuid $RUNTIME_UID --regid $RUNTIME_GID --clear-groups"
+    elif command -v su-exec >/dev/null 2>&1; then
+        DROPPER="su-exec $RUNTIME_UID:$RUNTIME_GID"
+    else
+        log "ERROR: no gosu/setpriv/su-exec in the image: cannot drop privileges, staying root"
+        return 0
+    fi
+    log "running as $RUNTIME_UID:$RUNTIME_GID (via ${DROPPER%% *})"
+    return 0
+}
+
+# A venv whose pyvenv.cfg `home =` points at a base interpreter the runtime uid
+# cannot read (a uv-managed toolchain under /root, say) starts and *then* dies
+# with "Fatal Python error: Failed to import encodings module", which says
+# nothing about the cause. Report it here; this check only ever warns.
+check_python() {
+    interpreter="$APP_DIR/.venv/bin/python"
+    if [ ! -x "$interpreter" ]; then
+        return 0
+    fi
+    # shellcheck disable=SC2086  # $DROPPER is an unquoted command list, possibly empty
+    if $DROPPER "$interpreter" -c "" >/dev/null 2>&1; then
+        return 0
+    fi
+    base_home=$(sed -n 's/^home *= *//p' "$APP_DIR/.venv/pyvenv.cfg" 2>/dev/null | head -1)
+    log "ERROR: $interpreter cannot start (base interpreter: ${base_home:-unknown})"
+    log "       If that path sits under a directory this uid cannot read (e.g. /root,"
+    log "       mode 0700), rebuild the image with UV_PYTHON_INSTALL_DIR outside it."
+    return 0
 }
 
 # --- main ----------------------------------------------------------------
@@ -123,7 +147,10 @@ if [ "$(id -u)" = "0" ]; then
     fi
     # The migration above may have just created the sqlite file as root.
     fix_data_root
-    drop_privileges "$@"
+    resolve_dropper
+    check_python
+    # shellcheck disable=SC2086  # $DROPPER is an unquoted command list, possibly empty
+    exec $DROPPER "$@"
 fi
 
 # Already started as a non-root user (compose `user:`): ownership cannot be
@@ -132,4 +159,5 @@ if [ ! -w "$DATA_DIR" ]; then
     log "ERROR: $DATA_DIR is not writable by $(id -u):$(id -g): annotation writes will fail"
     log "       Fix on the host: sudo chown -R $(id -u):$(id -g) <data dir>"
 fi
+check_python
 exec "$@"
