@@ -10,7 +10,7 @@ process, web administration UI at `/admin`.
 ## Layout
 
 ```console
-v2/            # the API (only /api/v2 exists: v1 was deleted, see docs/)
+app/            # the API (only /api/v2 exists: v1 was deleted, see docs/)
   app.py       #   create_app() factory; state lives on app.state
   core/        #   settings, errors, logging
   db/          #   models + alembic migrations
@@ -31,15 +31,12 @@ cp .env.example .env.v2        # set ZLSERVER_STORAGE_ROOT (and the model settin
 uv run alembic upgrade head    # create the v2 schema (fresh database)
 
 # create the first admin, then start the API
-uv run python -m v2.cli user add <name> --role admin
-uv run fastapi run v2/main.py  # http://127.0.0.1:8000, OpenAPI at /docs
+uv run python -m app.cli user add <name> --role admin
+uv run fastapi run app/main.py  # http://127.0.0.1:8000, OpenAPI at /docs
 
 # inference worker (own process, own GPU; needs ZLSERVER_MODEL_* + ZLSERVER_INFERENCE_TOKEN)
-uv run fastapi run v2/inference_worker/main.py --port 8001
+uv run fastapi run app/inference_worker/main.py --port 8001
 ```
-
-The v2 database (`ZLSERVER_DATABASE_URL`, default `./data/zlabel_server_v2.db`) is
-independent from the old `zlabel_server.db`: v1 data is **not** migrated.
 
 Quality gates:
 

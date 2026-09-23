@@ -72,8 +72,8 @@ def fake_predictor() -> FakePredictor:
 # A developer's real ``.env.v2`` holds live hosts and credentials. Capture the
 # shipped defaults first, then make the whole suite ignore the file: env *vars*
 # still work (tests set them explicitly), the file never leaks in.
+from app.core.config import Settings as _ApiSettings  # noqa: E402
 from inference.config import InferenceSettings as _WorkerSettings  # noqa: E402
-from v2.core.config import Settings as _ApiSettings  # noqa: E402
 
 ENV_FILE_DEFAULTS = {
     "api": _ApiSettings.model_config.get("env_file"),

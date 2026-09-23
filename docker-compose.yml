@@ -28,7 +28,7 @@ services:
   zlabel_inference:
     build:
       context: .
-    command: ["sh", "-c", "uv run fastapi run v2/inference_worker/main.py --host 0.0.0.0 --port 8001"]
+    command: ["sh", "-c", "uv run fastapi run app/inference_worker/main.py --host 0.0.0.0 --port 8001"]
     environment:
       - ZLSERVER_MODEL_NAME=SlimSAM   # EdgeSAM SAM SlimSAM SAM2 SAM3
       - ZLSERVER_MODEL_DIR=/app/assets/onnx

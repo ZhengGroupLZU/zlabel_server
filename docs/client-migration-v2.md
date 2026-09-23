@@ -24,7 +24,7 @@
 > （读=用户令牌、写=服务账号）。
 > C8 任务图像磁盘缓存（`~/.zlabel/cache/images` + ETag/If-None-Match，304 走本地）、
 > C9 标签表编辑（reviewer+，逐条提交）、C10 新建服务端项目（目录+标记文件+自动扫描）、
-> C11 zh_CN 全量翻译（375 条，0 unfinished）、C12 端到端覆盖：`tests/v2/test_client_contract.py`
+> C11 zh_CN 全量翻译（375 条，0 unfinished）、C12 端到端覆盖：`tests/app/test_client_contract.py`
 > 含"两人抢同一任务 → 租约过期 → 接管 → 前者保存被拒（带持有者名）→ reviewer 强制接管"，
 > 以及领取→保存→提交→复核→退回→重开与版本历史全链路。
 > 剩余：仅 M5 验收（DoD 逐条走查 + 真实数据集/CUDA 环境试跑）。

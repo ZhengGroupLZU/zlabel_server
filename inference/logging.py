@@ -1,6 +1,6 @@
 """Logger used across the inference assets.
 
-Kept separate from ``v2.core.logging`` so the inference worker (a separate
+Kept separate from ``app.core.logging`` so the inference worker (a separate
 process, and the only consumer of these modules) does not depend on the API
 layer. The class is the one v1 used (``app/logger.py``).
 """

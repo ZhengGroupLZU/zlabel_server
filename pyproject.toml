@@ -1,7 +1,7 @@
 [project]
 name = "zlabel-server"
 version = "0.1.0"
-description = "ZLabel annotation backend (v2): sessions/roles, task claim + review, annotations, self-hosted storage"
+description = "ZLabel annotation backend: sessions/roles, task claim + review, annotations, self-hosted storage"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -22,9 +22,9 @@ dependencies = [
 
 [project.scripts]
 # Server administration (users, storage, layout migration). A dev checkout uses
-# `uv run python -m v2.cli ...` instead: uv skips entry points for unpackaged
+# `uv run python -m app.cli ...` instead: uv skips entry points for unpackaged
 # projects (flat layout with two top-level packages).
-zlabel-server = "v2.cli:main"
+zlabel-server = "app.cli:main"
 
 [[tool.uv.index]]
 name = "aliyun"
@@ -36,7 +36,7 @@ python-install-mirror = "https://gh-proxy.com/https://github.com/astral-sh/pytho
 [tool.ruff]
 line-length = 110
 # alembic autogenerates files with its own (dated) template style
-extend-exclude = ["v2/db/migrations"]
+extend-exclude = ["app/db/migrations"]
 
 [tool.ruff.lint]
 select = [
@@ -72,7 +72,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not slow'"
+addopts = "-m 'not slow and not gpu'"
 pythonpath = ["."]
 markers = [
     "slow: 重型模型推理（真实大模型，需数十秒）",

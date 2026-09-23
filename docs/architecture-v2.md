@@ -27,10 +27,10 @@
 v1 已删除（代码留档在 `onnx` 分支）。可复用资产先搬出，再删 v1：
 
 ```
-inference/               # 从 app/ 搬来的推理资产（sam_ort/、worker.py、ztypes.py、
+inference/               # 从 v1 的 app/ 搬来的推理资产（sam_ort/、worker.py、ztypes.py、
                          # bbox_overlaps.py、debug_save.py、config.py、logging.py）
-v2/
-  main.py                # FastAPI 装配（include v2 routers + v1 兼容 router）+ lifespan
+app/
+  main.py                # FastAPI 装配（create_app 工厂 + routers + lifespan）
   core/
     config.py            # pydantic-settings，ZLSERVER_* 前缀
     logging.py           # 结构化日志 + request id
@@ -96,7 +96,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 
 要点：
 
-- **`tasks.anno_id` = `sha256("<project key>/<项目内相对路径>")`**：project key 是数据集 `.zlabel/project.json` 的 `"id"`（桌面端 `Project.id`），服务端存在 `projects.key`；改目录名/显示名不会失效。旧数据用 `uv run python -m v2.cli migrate-anno-ids` 一次性改名迁移。
+- **`tasks.anno_id` = `sha256("<project key>/<项目内相对路径>")`**：project key 是数据集 `.zlabel/project.json` 的 `"id"`（桌面端 `Project.id`），服务端存在 `projects.key`；改目录名/显示名不会失效。旧数据用 `uv run python -m app.cli migrate-anno-ids` 一次性改名迁移。
 - **标注文件在存储树里**（`<storage_root>/<project>/.zlabel/annos/<anno_id>.zlabel`，布局可用 `ZLSERVER_ANNO_DIR` 覆盖；历史版本在 `annos/_history/<anno_id>/v<n>.zlabel`），DB 只存元数据/版本/哈希 → 与桌面端镜像互通不变。
 - `tasks.rel_path` 是**项目内相对路径**（`images/a/D1.png`），`tasks.path` 是存储根下的路径；`get_image` 一律走 `project + rel_path`，修掉 v1 的 `get_image` 忽略 `project` 的口径问题。每个顶层目录都是一个项目（无标记文件）。
 - `tasks.group_name/day` 由服务端解析（规则见 §9），客户端不再靠文件名硬猜。
@@ -136,7 +136,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 | `GET/POST/PATCH/DELETE /api/v2/projects/{p}/labels[/{id}]` | 读 session / 写 reviewer+ | 标签 CRUD（名字、颜色、排序、归档）；标签的 **id 就是顺序号**（0 起，即导出的类别 id），新建默认追加 |
 | `GET/POST/PATCH/DELETE /api/v2/projects/{p}/instances[/{number}]` | 读 session / 写 reviewer+ | 项目级实例（文档 `instance_id` 指向它）：状态/名称/备注/颜色/归档；编号**不可改**；`GET /{number}/results` 看它包含的标注，`GET /statuses` 给状态候选 |
 | `PUT /api/v2/projects/{p}/labels/order` | reviewer+ | 重排标签（body `{"order": [id...]}`，必须恰好包含全部标签）；服务端把 `sort` 重写为 0..N-1，主键 `Label.id` 不变 |
-| `GET /api/v2/projects/{p}/tasks` | session | `state,claim,group,mine,limit,cursor,order=id\|sequence` |
+| `GET /api/v2/projects/{p}/tasks` | session | `state,claim,group,mine,limit,offset,order=sequence\|id\|recent\|random`；`limit=0` = 不限（“取全部”），显式值上限 `MAX_LIMIT=10000` |
 | `POST /api/v2/tasks/{anno_id}/claim\|release\|heartbeat` | session | 领取/释放/续租 |
 | `POST /api/v2/tasks/{anno_id}/submit` | 持有者 | 提交复核 |
 | `POST /api/v2/tasks/{anno_id}/review` | reviewer/admin | `{decision: approve\|reject, note}` |
@@ -155,7 +155,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 
 错误码约定：`404 not_found`（未标注/未找到，客户端可安全新建）、`409 conflict`（版本冲突或任务被他人领取，`detail.claimed_by` 区分）、`502 upstream_error`（存储/推理进程失败）、`503 inference_unavailable`。
 
-后台管理：`/api/v2/admin/users`（建号/改角色/启停/改密）、`/api/v2/admin/storage`、`/api/v2/admin/files`；项目成员 `/api/v2/projects/{p}/members`；项目实例 `/api/v2/projects/{p}/instances`。Web 后台 `/admin`（Dashboard / Users / Projects / Files / Audit log）把这些写操作重新走服务层，审计与会话吊销与 API 一致；项目范围内的文件、成员、标签、实例、任务都在项目详情页（实例页：编号只读、其余字段一个 Save all 批量提交）。Dashboard 的状态卡由 `GET /admin/status`（admin cookie 会话）每 30 s 轮询，服务端数据来自 `StatusService`，前端逻辑在 `v2/admin/static/js/dashboard-status.js`。
+后台管理：`/api/v2/admin/users`（建号/改角色/启停/改密）、`/api/v2/admin/storage`、`/api/v2/admin/files`；项目成员 `/api/v2/projects/{p}/members`；项目实例 `/api/v2/projects/{p}/instances`。Web 后台 `/admin`（Dashboard / Users / Projects / Files / Audit log）把这些写操作重新走服务层，审计与会话吊销与 API 一致；项目范围内的文件、成员、标签、实例、任务都在项目详情页（实例页：编号只读、其余字段一个 Save all 批量提交）。Dashboard 的状态卡由 `GET /admin/status`（admin cookie 会话）每 30 s 轮询，服务端数据来自 `StatusService`，前端逻辑在 `app/admin/static/js/dashboard-status.js`。
 
 ## 7. 鉴权与会话
 
@@ -163,9 +163,9 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 2. 服务端用 `LocalIdentity` 校验 scrypt 哈希（`IdentityProvider` 是可替换的接缝）→ 解析/建立 `users` 行（**首个用户自动 admin**，其余默认 annotator；`ZLSERVER_BOOTSTRAP_ADMIN/PASSWORD` 只建不改）。
 3. 生成 32 字节随机 token（DB 只存 `sha256`），TTL 30 天。
 4. 后续请求 `Authorization: Bearer <token>` → `get_auth` 依赖解析会话（60s 内存缓存命中校验）。
-5. 会话失效/被吊销 → 401 `unauthorized`（`session_stale` 保留为客户端重新登录的语义码）。
+5. 会话失效/被吊销（登出、改密、改角色、停用、过期）→ 401 `session_stale` = “重新登录”；缺 token / 未知 token → 401 `unauthorized`（没有可续的会话）。桌面端对一次 401 会自动重登并重放该请求一次（`api_helper._RetryingRequests`），显式 logout 之后不再自动重登。
 6. 角色矩阵：`annotator` 领取/保存/提交自己的任务；`reviewer` 额外可 `force` 释放、复核、扫描、标签写；`admin` 额外可建项目、改角色、管账号。`ZLSERVER_PROJECT_ACCESS_MODE=strict` 时改看 `project_members` 的项目级角色（全局 admin 例外）。
-7. 改角色/停用/改密都会立即吊销该账号的全部会话（`AuthService.update_user/set_password`，REST、CLI、`/admin` 共用同一条路径）。
+7. 改角色/停用/改密都会立即吊销该账号的全部会话（`AuthService.update_user/set_password`，REST、CLI、`/admin` 共用同一条路径 —— `app.cli user passwd/role` 也走 `AuthService`）。
 
 ## 8. 推理服务（独立进程）
 
@@ -196,13 +196,13 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 
 v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。搬迁/删除边界：
 
-**搬走（继续服务 v2）**
+**搬走（v1 的 `app/` → 继续服务 v2）**
 - `app/sam_ort/`、`app/worker.py`、`app/ztypes.py`、`app/bbox_overlaps.py`、`app/debug_save.py` → `inference/`（模型参数与 logger 各自成模块：`inference/config.py`、`inference/logging.py`）
 - 数值回归测试（preprocess/postprocess/tokenize/worker/backends/models_slow/cuda）→ `tests/inference/`
 
-**删除（v1 专属）**
-- `app/app.py`（v1 全部路由与模块级状态）、`app/db.py`、`app/config.py`、`app/logger.py`、`app/project_scan.py`、`app/schemas.py`
-- v1 的接口/DB 语义测试（test_api / test_auth / test_labels / test_save_zlabel / test_missing_tasks / test_anno_id / test_project_scan）——覆盖在 M2 用 v2 服务层测试重建；`anno_id` 契约已在 `tests/v2/test_models.py` 固化
+**删除（v1 专属：整个 v1 的 `app/` 包）**
+- `app/app.py`（全部路由与模块级状态）、`app/db.py`、`app/config.py`、`app/logger.py`、`app/project_scan.py`、`app/schemas.py`
+- v1 的接口/DB 语义测试（test_api / test_auth / test_labels / test_save_zlabel / test_missing_tasks / test_anno_id / test_project_scan）——覆盖在 M2 用 v2 服务层测试重建；`anno_id` 契约已在 `tests/app/test_models.py` 固化
 - 未使用依赖 `fastapi-users`、`typer`；`.env.onnx`（v1 变量名）→ `.env.example`（`ZLSERVER_*`）
 
 **不可回退点**：`/api/v1` 与 `zlabel_server.db` 一起失效。回滚只有两条路——部署上一个 v2 版本（推荐，数据面不变），或整体退回 `onnx` 分支（必须同时退回旧客户端，且新旧库数据不互通）。
@@ -219,7 +219,7 @@ v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。
 |---|---|---|
 | M0 | v1 冻结基线（已做：`fc04ef4`） | `pytest -m "not slow"` 除真 GPU 用例全绿 |
 | M1 | v2 骨架（config/db/models/security/health）+ alembic 初始迁移 | ✅ 已完成：`/api/v2/health` 可用，`upgrade head`/`downgrade base`/`alembic check` 全绿 |
-| M1b | 资产搬迁（`inference/`、`v2/vendor/`）+ v1 彻底删除 + 基建/文档更新 | ✅ 已完成：`app/` 不存在，推理回归测试全绿 |
+| M1b | 资产搬迁（推理资产进 `inference/`，`vendor/openlist_api` 删除）+ v1 彻底删除 + 基建/文档更新 | ✅ 已完成：v1 的 `app/` 已删除，推理回归测试全绿 |
 | M2 | 服务层 + `/api/v2` 端点（auth/projects/tasks/annotations/images/labels/progress/predict）+ hermetic 测试 | ✅ 已完成：109 个 v2 用例（role/lease/conflict/版本/预测） |
 | M3 | 推理进程 + InferenceClient（embedding 缓存、health、metrics） | ✅ 已完成：同图重复请求零编码（快照恢复），模型在独立进程 |
 | M4 | 桌面端切 v2（见 `client-migration-v2.md`） | 进行中：协议层 C1–C3+C7 已完成（分支 `zlabel-v2-client`，含跨仓库契约测试）；领取/复核 UI 等留待第二批 |
@@ -247,7 +247,7 @@ v1 代码已整体删除，`onnx` 分支（提交 `fc04ef4`）是唯一留档。
 
 ## 15. 已知风险
 
-- **账号丢失/遗忘密码**：服务端不保存明文，忘记密码只能由管理员在 `/admin/accounts` 重置（或 `uv run python -m v2.cli user passwd`）；没有自助找回。
+- **账号丢失/遗忘密码**：服务端不保存明文，忘记密码只能由管理员在 `/admin/accounts` 重置（或 `uv run python -m app.cli user passwd`）；没有自助找回。
 - **SQLite 写并发**：领取/提交是短事务，<50 人够用；上多副本需换 Postgres（仓库层已隔离，切换成本可控）。
 - **SAM3 显存**：vision arena ~7GB 不回收，worker 每个任务建/销 session 的既有策略必须逐行保留。
 - **无灰度能力**：`/api/v1` 已删除，服务端与桌面端必须同步发布；上线前要有停机窗口与“上一版 v2”的部署包。

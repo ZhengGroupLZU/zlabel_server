@@ -2,7 +2,7 @@
 
 FastAPI labeling backend for the ZLabel desktop client: **self-hosted** (the server
 owns `ZLSERVER_STORAGE_ROOT` and its account table), SQLite, ONNXRuntime (SAM
-family). v2 is implemented; v1 (`app/`) was deleted and its last state is the
+family). The current API lives in `app/`; v1 was deleted and its last state is the
 `onnx` branch (`fc04ef4`). The storage/identity layers were rebuilt without
 OpenList (P6 done, see `docs/plan-selfhosted-storage.md`); the design record lives
 in `docs/architecture-v2.md` (read it before structural changes).
@@ -10,7 +10,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
 ## Commands
 
 - Setup: `uv sync` (Python 3.13 via `.python-version`)
-- Admin CLI: `uv run python -m v2.cli user add <name> --role reviewer|annotator|admin` ·
+- Admin CLI: `uv run python -m app.cli user add <name> --role reviewer|annotator|admin` ·
   `user ls` · `user passwd <name>` · `user role <name> <role>` · `project ls` ·
   `project members <project>` · `project add-member <project> <user> --role ...` ·
   `storage usage` · `migrate-layout --root <storage-root> [--dry-run]` (moves
@@ -44,7 +44,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
   labels** button then posts the whole table to ``/label/save-all``
   (`ProjectService.save_labels`: field edits audited per label, ``sort`` rewritten to
   0..N-1; `Label.id` is untouched). New labels are appended and get an unused palette
-  colour (`v2/services/label_palette.py`); the colour control is a dropdown of
+  colour (`app/services/label_palette.py`); the colour control is a dropdown of
   swatch + hex entries plus a hex field (``#rrggbb``/``#rgb``/bare ``rrggbb``). **Dashboard** is the landing page: storage usage, progress, the project
   table, a rescan button, and two status cards (**Server status** / **Inference
   worker**) populated by `GET /admin/status` every 30 s from a shared static JS file. The only remaining starlette-admin ``ModelView`` is the
@@ -52,7 +52,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
   table has no ModelView, and a relation field without a target view is rejected).
   Tasks/Labels/Members/Storage/Accounts no longer exist as separate pages.
   ``can_create``/``can_edit``/``can_delete`` must be **sync** methods - 1.x calls
-  them without awaiting, so an ``async def`` override is always truthy (`v2/admin/`).
+  them without awaiting, so an ``async def`` override is always truthy (`app/admin/`).
 - Admin REST (global `admin` role): `/api/v2/admin/users` (+ `/{id}`, `/{id}/password`),
   `/api/v2/admin/storage`, `/api/v2/admin/files` (list/upload/download/delete/mkdir/move).
   Project instances: `/api/v2/projects/{p}/instances` (+ `/{number}`, `/{number}/results`,
@@ -67,17 +67,19 @@ in `docs/architecture-v2.md` (read it before structural changes).
   `strict` = members only, global admins always see everything).
 - Migrations: `uv run alembic upgrade head` · `uv run alembic revision --autogenerate -m "msg"`
   (URL comes from `ZLSERVER_DATABASE_URL`, `-x db_url=...` overrides; never put it in `alembic.ini`)
-- Dev server: `uv run fastapi run v2/main.py` (entrypoint `v2/main.py`; OpenAPI at `/docs`).
+- Dev server: `uv run fastapi run app/main.py` (entrypoint `app/main.py`; OpenAPI at `/docs`).
   On Windows run `chcp 65001` or set `PYTHONIOENCODING=utf-8` — FastAPI's rich banner
   crashes on a GBK console with `UnicodeEncodeError`.
-- Cross-repo contract test: `tests/v2/test_client_contract.py` loads the desktop's
+- Cross-repo contract test: `tests/app/test_client_contract.py` loads the desktop's
   `zlabel/utils/api_helper.py` (standalone, without PySide6) and routes its
   `requests` calls into the in-process app — every URL/params/body the desktop
   produces is checked against the server. It skips unless the desktop checkout is
   present next door (``zlabel_server/`` normally lives inside it).
-- Tests: `uv run pytest` (pyproject defaults to `-m 'not slow'`) ·
+- Tests: `uv run pytest` (pyproject defaults to `-m 'not slow and not gpu'`, so an
+  ordinary machine stays green and fast) ·
   `uv run pytest -m slow` (real ONNX models, minutes) ·
-  `uv run pytest -m gpu` (CPU/CUDA parity; needs a working CUDA/cuBLAS stack)
+  `uv run pytest -m gpu` (CPU/CUDA parity; needs a working CUDA/cuBLAS stack) ·
+  an explicit `-m` replaces the default, so `-m 'not gpu'` would re-include the slow tests
 - Lint: `uv run ruff check .` and `uv run ruff format .` (line-length 110)
 - Docker: `docker compose up` (API + inference worker; datasets come from the
   host directory mounted at `ZLSERVER_STORAGE_ROOT`)
@@ -97,13 +99,13 @@ in `docs/architecture-v2.md` (read it before structural changes).
 
 ## Contracts that must not break
 
-- **anno_id**: `sha256("<project key>/<project-relative posix path>")` (`v2/contracts/ids.py`),
+- **anno_id**: `sha256("<project key>/<project-relative posix path>")` (`app/contracts/ids.py`),
   identical to the desktop client's `zlabel.utils.project.anno_id_for`. The **project key**
   is the dataset's `.zlabel/project.json` `"id"` (the desktop's `Project.id`), stored in
   `projects.key`; `ProjectService.ensure_project_key` adopts it, restores the DB one when
   the file is missing and mints a new one otherwise, so renaming the directory or the
   display name never invalidates annotations. `legacy_anno_id_for` keeps the old
-  `md5("<project name>/<rel>")` formula for `v2.cli migrate-anno-ids` only.
+  `md5("<project name>/<rel>")` formula for `app.cli migrate-anno-ids` only.
 - **Annotation files live in the storage tree** at
   `{ZLSERVER_STORAGE_ROOT}/{project}/{ZLSERVER_ANNO_DIR}/<anno_id>.zlabel`
   (`anno_dir` defaults to `.zlabel/annos`, history under `_history/<anno_id>/v<n>.zlabel`);
@@ -112,7 +114,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
   (`unauthorized`/`session_stale`/`forbidden`/`not_found`/`conflict`/`lease_conflict`/
   `validation_error`/`upstream_error`/`inference_unavailable`). A missing annotation
   is `404 not_found` = "not annotated yet" (safe for the client to create).
-- **Capabilities** in `GET /api/v2/health` (`v2/api/v2/health.py: CAPABILITIES`):
+- **Capabilities** in `GET /api/v2/health` (`app/api/v2/health.py: CAPABILITIES`):
   the desktop gates claim/review/version UI on them — add a capability whenever a
   new client-visible feature appears.
 - **Instance numbers are document references**: `Result.instance_id` /
@@ -121,32 +123,36 @@ in `docs/architecture-v2.md` (read it before structural changes).
   mirrors every annotation save into `instances`/`instance_results` (instances are
   created on first sight: status from the document, colour from the palette; the
   admin's edits win, an empty status is filled from later documents), and
-  `v2.cli sync-instances` backfills documents saved before the tables existed.
+  `app.cli sync-instances` backfills documents saved before the tables existed.
   Deleting an instance removes only the registry row + links; a later save that
   still uses the number recreates it.
 - **Auth**: the client holds an opaque server session token (`Authorization:
   Bearer`); the DB stores only its sha256. Passwords are scrypt hashes in `users`
   (`LocalIdentity`), never plaintext. Role/enable/password changes revoke the
-  account's sessions (`AuthService.update_user`/`set_password`), and the desktop
-  re-logs in on 401.
+  account's sessions (`AuthService.update_user`/`set_password`, which the CLI's
+  `user passwd`/`user role` also go through), and the desktop re-logs in on 401:
+  `resolve` answers `401 session_stale` for a known-but-dead session (revoked /
+  expired / disabled account) and plain `401 unauthorized` for a missing or
+  unknown token - keep that split, the desktop renews on either one and
+  `tests/app/test_client_contract.py` drives the real client through it.
 
 ## Architecture
 
-- `v2/app.py` — `create_app(settings, database)`; **all state on `app.state`**
+- `app/app.py` — `create_app(settings, database)`; **all state on `app.state`**
   (`settings`, `db`). Tests build an isolated app with an in-memory DB instead of
   monkeypatching module globals (the v1 pattern that v2 deliberately drops).
-- `v2/core/` — `config.py` (`ZLSERVER_*` settings, `get_settings()` cached),
+- `app/core/` — `config.py` (`ZLSERVER_*` settings, `get_settings()` cached),
   `errors.py` (ApiError hierarchy + handlers), `logging.py` (request-id aware).
-- `v2/db/` — `base.py` (`Database.session_scope`, `get_session` dependency),
+- `app/db/` — `base.py` (`Database.session_scope`, `get_session` dependency),
   `models.py` (users, sessions, projects, project_members, labels, tasks, instances,
   instance_results, annotations, annotation_versions, audit_log, link tables),
   `migrations/` (alembic).
   State machine: `draft → submitted → approved|rejected`; claim trio
   `claimed_by/claimed_at/lease_expires_at`.
-- `v2/api/v2/` — routers only (thin): `auth`, `projects`, `labels`, `instances`,
+- `app/api/v2/` — routers only (thin): `auth`, `projects`, `labels`, `instances`,
   `tasks`, `annotations`, `images`, `predict`, `health`; shared dependencies live in
-  `v2/api/deps.py` (`get_services`, `get_auth`, `require_roles`).
-- `v2/services/` — business logic: `auth_service` (sessions/roles),
+  `app/api/deps.py` (`get_services`, `get_auth`, `require_roles`).
+- `app/services/` — business logic: `auth_service` (sessions/roles),
   `project_service` (discovery/sync, labels, progress), `instance_service`
   (project-scoped instances: mirrored from documents + CRUD), `task_service`
   (listing, claim+lease, submit/review), `annotation_service` (versioned save,
@@ -154,7 +160,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
   (auto-assigned label colours), `status_service` (DB/storage/worker probes +
   the dashboard status JSON), `grouping`, `audit`, `container` (the `Services`
   dataclass built by `create_app`).
-- `v2/adapters/` — the swappable edges:
+- `app/adapters/` — the swappable edges:
   * `storage.py`: the `StorageBackend` protocol (paths + IO methods, no credential
     arguments) and `build_storage()`; `local_disk.py` is the only implementation
     (atomic writes, traversal-proof, every top-level directory is a project).
@@ -162,14 +168,14 @@ in `docs/architecture-v2.md` (read it before structural changes).
     in `users`, stdlib only); `ZLSERVER_BOOTSTRAP_ADMIN/PASSWORD` creates the first
     admin once (never resets an existing password).
   * `inference.py`: `InferenceClient` → the worker's `/infer`.
-- `v2/admin/` — the starlette-admin UI: `auth.py` (`ZLabelAuthProvider` cookie
+- `app/admin/` — the starlette-admin UI: `auth.py` (`ZLabelAuthProvider` cookie
   sessions + `admin_context`), `views.py` (write pages + model views with the
   service-layer hooks), `__init__.py` (`build_admin`/`mount_admin`).
-- `v2/inference_worker/` — the model's own process: `main.py`
+- `app/inference_worker/` — the model's own process: `main.py`
   (`create_worker_app`: `/infer` + `/health` + `/metrics`), `engine.py`
   (`InferenceEngine`: admission queue, embedding snapshots, crop handling,
   metrics), `schemas.py` (job/response models). Run it with
-  `uv run fastapi run v2/inference_worker/main.py --port 8001`.
+  `uv run fastapi run app/inference_worker/main.py --port 8001`.
 - `inference/` — `sam_ort/` (Predictor/SamRunner/Sam2Runner/Sam3Runner),
   `worker.py` (`ZSamWorker`: prompt → mask → contour post-processing),
   `ztypes.py` (wire types + `AutoMode`/`ReturnType`), `config.py`
@@ -186,6 +192,12 @@ in `docs/architecture-v2.md` (read it before structural changes).
 - **SAM3 CUDA quirks (respect the code comments)**: the vision encoder's CUDA arena
   holds ~7GB and never shrinks, so `Sam3Runner` builds the vision session per encode
   and releases it; the text encoder is deliberately pinned to CPU.
+- **Project scoping is per router, not global**: every router under
+  `/projects/{project}/...` (and the anno-id-addressed `/tasks/{anno_id}`) must resolve the
+  project through `get_project(..., auth=...)` or `require_access`; a bare
+  `get_project(project)` skips membership and only shows up in `strict` mode
+  (labels / images / predict were fixed that way - `tests/app/test_members.py`
+  probes the whole surface, keep it green when adding an endpoint).
 - **A missing file is a 404, not a 500**: `LocalDiskBackend` raises `NotFound` for
   absent paths and `UpstreamError` only for real IO failures; never widen that.
 - **SQLite foreign keys are ON in the app**: `Database` installs
@@ -198,8 +210,8 @@ in `docs/architecture-v2.md` (read it before structural changes).
   children explicitly (works on any backend, and the file removal stays inside the
   same transaction: a permission error rolls everything back).
 - `tests/conftest.py` is shared (image fixtures + `FakePredictor`); v2 API tests use
-  `tests/v2/conftest.py` (in-memory DB, real temp storage, `auth_headers` helper) and
-  `tests/v2/fakes.py` (`LocalBackendHarness`, `FakeInference`). The fixture that used
+  `tests/app/conftest.py` (in-memory DB, real temp storage, `auth_headers` helper) and
+  `tests/app/fakes.py` (`LocalBackendHarness`, `FakeInference`). The fixture that used
   to be called `ol` is `harness`; it seeds the real storage root.
 - **Timeline is per project**: `projects.timeline` (default on) decides whether the
   scanner parses `group_name`/`day` from the task path (`species/dish/D{n}.png`).
@@ -207,7 +219,7 @@ in `docs/architecture-v2.md` (read it before structural changes).
   Overview, or `PATCH /projects/{p}` with `timeline`) recomputes every existing task
   in the same transaction. The desktop hides nothing yet — it just sees empty groups.
 - **Scanning is manual only**: the app factory starts no scan thread and the config has no
-  `scan_on_startup`/`project_scan_interval` any more. `tests/v2/test_startup.py` asserts that a fresh app
+  `scan_on_startup`/`project_scan_interval` any more. `tests/app/test_startup.py` asserts that a fresh app
   leaves the task table empty (the dataset on disk stays invisible) and that `POST /projects/scan` is the
   trigger - use a **file-backed** DB there (the in-memory StaticPool connection cannot be shared with a
   scan thread).
@@ -220,13 +232,23 @@ in `docs/architecture-v2.md` (read it before structural changes).
   (the value the client sends when both toggles are on). Only the rect path
   implements 0/3; the worker validates up front so clients get 422, not a 500.
 - Listing parameters the desktop relies on: `state` accepts a comma separated list
-  (`draft,rejected`), `order` is `sequence|id|recent|random`, and
+  (`draft,rejected`), `limit=0` means "every matching task" (the File dock's Fetch ▸
+  "all" sends it; explicit values are capped at `MAX_LIMIT = 10000`, negatives/oversized
+  are a 422), `offset` still pages an unlimited request, `order` is
+  `sequence|id|recent|random`, and
   `POST /projects/{p}/scan` works for a project that does not exist yet (finding new
   directories under the storage root is the point of a scan).
+- Prediction parameters the desktop relies on: ``POST /projects/{p}/predict`` resolves the
+  task image from, in order, the uploaded file, ``rel_path`` (a project-relative path in
+  the storage tree) or ``image_sha256`` (the content-addressed upload cache behind
+  ``PUT /projects/{p}/images/{rel_path}``); an unknown digest answers 404 on purpose,
+  which is how the client knows to upload the bytes again. The desktop uploads a local
+  task image once and then predicts by digest, so keep that route working
+  (`tests/app/test_client_contract.py::test_predict_by_uploaded_digest_costs_no_image_bytes`).
 - **Renaming a dataset directory by hand re-keys it**: a scan adopts the key from
   `.zlabel/project.json`; if the same key already belongs to another project (a copied
   dataset, or the row of the old directory name), the scanner mints a new key and
-  writes it back. Run `uv run python -m v2.cli migrate-anno-ids` afterwards to rename
+  writes it back. Run `uv run python -m app.cli migrate-anno-ids` afterwards to rename
   the annotation files of that project.
 - Claim state: `draft → submitted → approved|rejected` (`reopen` pulls back to draft).
   A claim carries `lease_expires_at`; an expired lease is claimable by anyone, a live

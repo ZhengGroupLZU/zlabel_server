@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from conftest import IMG_SIZE, blob_mask
 
 from inference.worker import ZSamWorker
 from inference.ztypes import AutoMode, Point, Polygon, Rect, ReturnType, SamOnnxResult
+from tests.conftest import IMG_SIZE, blob_mask
 
 
 class MaskPredictor:
