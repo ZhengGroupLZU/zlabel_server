@@ -35,11 +35,11 @@ def test_worker_refuses_to_serve_without_a_secret():
     assert "ZLSERVER_INFERENCE_TOKEN" in resp.json()["message"]
 
 
-def test_the_env_file_is_the_default_v2_file(shipped_env_file):
+def test_the_env_file_is_the_default_dotenv_file(shipped_env_file):
     """A stale v1 ``.env.onnx`` must never be read (see tests/conftest.py)."""
     from app.core.config import Settings
     from inference.config import InferenceSettings
 
-    assert shipped_env_file["api"] == shipped_env_file["worker"] == ".env.v2"
+    assert shipped_env_file["api"] == shipped_env_file["worker"] == ".env"
     assert Settings.model_config["env_prefix"] == "ZLSERVER_"
     assert InferenceSettings.model_config["env_prefix"] == "ZLSERVER_"

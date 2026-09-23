@@ -1,9 +1,9 @@
 """Server configuration.
 
-Every env var uses the ``ZLSERVER_`` prefix and the optional ``.env.v2`` file
-(kept separate from the deleted v1 ``.env.onnx`` so a stale file is never read by
-accident). The API and the inference worker share the prefix; each process reads
-the fields it knows and ignores the rest.
+Every env var uses the ``ZLSERVER_`` prefix and the optional ``.env`` file (the
+dead v1 file is ``.env.onnx``, which is never read). The API and the inference
+worker share the prefix; each process reads the fields it knows and ignores the
+rest.
 
 The database is a **fresh file** (``data/zlabel_server_v2.db``): v1 data was not
 migrated and old projects are intentionally not preserved.

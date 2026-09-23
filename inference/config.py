@@ -2,7 +2,7 @@
 
 Read by the inference worker process and by the API when it needs model metadata
 (e.g. which models exist). Same ``ZLSERVER_`` env prefix as the API, so one env
-file (``.env.v2``) configures both processes.
+file (``.env``) configures both processes.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class InferenceSettings(BaseSettings):
     request_timeout: float = 300.0
 
     model_config = SettingsConfigDict(
-        env_prefix="ZLSERVER_", env_file=".env.v2", env_file_encoding="utf-8", extra="ignore"
+        env_prefix="ZLSERVER_", env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
 

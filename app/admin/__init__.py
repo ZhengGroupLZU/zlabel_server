@@ -56,6 +56,13 @@ def mount_admin(app, services: Services) -> None:
     if not services.settings.admin_enabled:
         logger.info("admin UI disabled (ZLSERVER_ADMIN_ENABLED=false)")
         return
+    if not services.settings.secret_key:
+        # ``build_admin`` falls back to a public hard-coded key: anyone reading
+        # this repo could then forge an admin session cookie.
+        logger.error(
+            "ZLSERVER_SECRET_KEY is empty: the admin UI signs its cookies with a public "
+            "default. Set a long random value before exposing this server."
+        )
     admin = build_admin(services)
     admin.mount_to(app)
     logger.info(f"admin UI mounted at {services.settings.admin_path} (admins only)")

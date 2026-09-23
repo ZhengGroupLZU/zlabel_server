@@ -69,7 +69,7 @@ def fake_predictor() -> FakePredictor:
 
 
 # --- hermetic configuration ------------------------------------------------- #
-# A developer's real ``.env.v2`` holds live hosts and credentials. Capture the
+# A developer's real ``.env`` holds live hosts and credentials. Capture the
 # shipped defaults first, then make the whole suite ignore the file: env *vars*
 # still work (tests set them explicitly), the file never leaks in.
 from app.core.config import Settings as _ApiSettings  # noqa: E402
@@ -97,7 +97,7 @@ def shipped_env_file() -> dict[str, str | None]:
 
 @pytest.fixture(autouse=True)
 def _hermetic_env_file(monkeypatch):
-    """Do not read ``.env.v2`` (nor any other env file) during tests."""
+    """Do not read ``.env`` (nor any other env file) during tests."""
     for cls in (_ApiSettings, _WorkerSettings):
         monkeypatch.setattr(cls, "model_config", {**cls.model_config, "env_file": None})
     yield

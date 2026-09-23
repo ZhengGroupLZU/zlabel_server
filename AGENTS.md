@@ -256,7 +256,8 @@ in `docs/architecture-v2.md` (read it before structural changes).
   a save without `base_version` is only accepted while the task has no stored version.
 - `TaskRow` resolves the holder/reviewer names with one extra query: reading them via
   `task.claimer` goes stale the moment `claimed_by` is mutated in the same session.
-- `.env*` is gitignored except `.env.example`; the real config is `.env.v2`.
+- `.env*` is gitignored except `.env.example`; the real config is `.env` (docker
+  compose reads the same file for `${...}` interpolation and as `env_file:`).
 
 ## Decisions (already agreed with the user — do not relitigate)
 

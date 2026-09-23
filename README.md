@@ -27,7 +27,7 @@ tests/         # v2 API/service tests, inference regression tests
 
 ```console
 uv sync
-cp .env.example .env.v2        # set ZLSERVER_STORAGE_ROOT (and the model settings)
+cp .env.example .env           # set ZLSERVER_STORAGE_ROOT (and the model settings)
 uv run alembic upgrade head    # create the v2 schema (fresh database)
 
 # create the first admin, then start the API

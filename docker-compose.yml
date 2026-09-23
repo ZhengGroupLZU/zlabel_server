@@ -16,10 +16,11 @@ services:
       - ./data:/app/data
       - ./assets:/app/assets
     env_file:
-      - .env.v2
+      - .env
     environment:
       # who the API runs as. Export them before `docker compose up`:
       #   export ZLABEL_UID=$(id -u) ZLABEL_GID=$(id -g)
+      # (they can also live in `.env`, which compose reads for ${...} too).
       - ZLABEL_UID=${ZLABEL_UID:-0}
       - ZLABEL_GID=${ZLABEL_GID:-0}
       # auto = repair ./data when its storage root belongs to another uid;
@@ -55,6 +56,8 @@ services:
     build:
       context: .
     command: ["/app/.venv/bin/fastapi", "run", "app/inference_worker/main.py", "--host", "0.0.0.0", "--port", "8001"]
+    env_file:
+      - .env
     environment:
       - ZLABEL_UID=${ZLABEL_UID:-0}
       - ZLABEL_GID=${ZLABEL_GID:-0}
@@ -66,7 +69,9 @@ services:
       - ZLSERVER_ORT_BACKEND=CUDA     # CPU CUDA (falls back to CPU if unavailable)
       - ZLSERVER_ORT_THREADS=8
       - ZLSERVER_API_BASE_URL=http://zlabel_server:8000
-      - ZLSERVER_EMBEDDING_CACHE_SIZE=8
+      # ZLSERVER_INFERENCE_TOKEN is shared with the API: both services read it
+      # from .env (env_file above), so the two sides cannot drift into a 403.
+      # ZLSERVER_EMBEDDING_CACHE_SIZE comes from .env as well.
       - ZLSERVER_MAX_CONCURRENCY=1
       - ZLSERVER_SAM3_CONF=0.25
       - ZLSERVER_SAM3_IOU=0.7
@@ -74,7 +79,6 @@ services:
       - ZLSERVER_CONTOUR_MAX_POINTS=100
       - ZLSERVER_CONTOUR_MAX_ITERATIONS=10
       - ZLSERVER_MIN_CONTOUR_AREA_RATIO=3.0e-5
-      - ZLSERVER_EMBEDDING_CACHE_SIZE=32
     volumes:
       - ./assets:/app/assets
     deploy:
