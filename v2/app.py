@@ -8,6 +8,7 @@ of monkeypatching module globals — the main structural fix over v1.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -67,6 +68,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         logger.info(f"v{settings.version} starting (db={db.url})")
+        _app.state.started_at = datetime.now(UTC)
+        _app.state.services.started_at = _app.state.started_at
         _bootstrap_admin()
         try:
             yield

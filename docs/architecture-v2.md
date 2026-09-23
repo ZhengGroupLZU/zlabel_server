@@ -127,7 +127,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 | `POST /api/v2/auth/login` | — | body `{username,password,client}` → `{token,expires_at,user{id,name,role}}` |
 | `GET /api/v2/auth/me` | session | 当前用户 + 角色 + 统计 |
 | `POST /api/v2/auth/logout` | session | 撤销当前会话 |
-| `GET /api/v2/health` | — | `{db[, storage, inference], version, capabilities[]}`（能力探测用；`deep=true` 才探 storage/inference） |
+| `GET /api/v2/health` | — | `{db[, storage, inference], version, capabilities[]}`（能力探测用；`deep=true` 才探 storage/inference；检查逻辑在 `StatusService`） |
 | `GET /api/v2/projects` | session | 项目列表（含我的进度） |
 | `POST /api/v2/projects` | admin/reviewer | 建项目（在存储根下建目录 + DB 行） |
 | `PATCH /api/v2/projects/{p}` | admin/reviewer | 描述/显示名/启停/`timeline`（关掉则不解析 group/day，切换时立即重算已有任务） |
@@ -155,7 +155,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 
 错误码约定：`404 not_found`（未标注/未找到，客户端可安全新建）、`409 conflict`（版本冲突或任务被他人领取，`detail.claimed_by` 区分）、`502 upstream_error`（存储/推理进程失败）、`503 inference_unavailable`。
 
-后台管理：`/api/v2/admin/users`（建号/改角色/启停/改密）、`/api/v2/admin/storage`、`/api/v2/admin/files`；项目成员 `/api/v2/projects/{p}/members`；项目实例 `/api/v2/projects/{p}/instances`。Web 后台 `/admin`（Dashboard / Users / Projects / Files / Audit log）把这些写操作重新走服务层，审计与会话吊销与 API 一致；项目范围内的文件、成员、标签、实例、任务都在项目详情页（实例页：编号只读、其余字段一个 Save all 批量提交）。
+后台管理：`/api/v2/admin/users`（建号/改角色/启停/改密）、`/api/v2/admin/storage`、`/api/v2/admin/files`；项目成员 `/api/v2/projects/{p}/members`；项目实例 `/api/v2/projects/{p}/instances`。Web 后台 `/admin`（Dashboard / Users / Projects / Files / Audit log）把这些写操作重新走服务层，审计与会话吊销与 API 一致；项目范围内的文件、成员、标签、实例、任务都在项目详情页（实例页：编号只读、其余字段一个 Save all 批量提交）。Dashboard 的状态卡由 `GET /admin/status`（admin cookie 会话）每 30 s 轮询，服务端数据来自 `StatusService`，前端逻辑在 `v2/admin/static/js/dashboard-status.js`。
 
 ## 7. 鉴权与会话
 

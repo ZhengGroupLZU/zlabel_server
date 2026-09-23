@@ -15,6 +15,8 @@ rows and session revocation behave identically whichever surface an admin uses.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from starlette_admin.contrib.sqla import Admin
 
 from v2.admin.auth import ZLabelAuthProvider
@@ -35,6 +37,7 @@ def build_admin(services: Services) -> Admin:
         base_url=settings.admin_path,
         auth_provider=ZLabelAuthProvider(services, base_url=settings.admin_path),
         index_view=DashboardView(services),
+        static_dir=str(Path(__file__).parent / "static"),
         secret_key=settings.secret_key or "zlabel-admin-dev-secret",
         # the UI stays in English: the desktop client's i18n is separate
     )

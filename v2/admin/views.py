@@ -14,6 +14,7 @@ plus a ``tab`` query parameter).
 
 from __future__ import annotations
 
+import asyncio
 import io
 import re
 from typing import Any
@@ -21,10 +22,11 @@ from urllib.parse import urlencode
 
 from markupsafe import Markup
 from starlette.requests import Request
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette_admin.contrib.sqla import ModelView
 from starlette_admin.fields import StringField
 from starlette_admin.flash import flash
+from starlette_admin.helpers import static_url
 from starlette_admin.routing import route
 from starlette_admin.security.csrf import csrf_input
 from starlette_admin.views import CustomView
@@ -255,7 +257,7 @@ class _PageView(CustomView):
         self.services = services
 
     # region plumbing
-    def render(self, request: Request, html: str) -> Response:
+    def render(self, request: Request, html: str, *, additional_js: list[str] | None = None) -> Response:
         assert self._admin is not None, "view must be mounted before use"
         return self._admin._template_response(
             request=request,
@@ -268,7 +270,7 @@ class _PageView(CustomView):
                 # render_widget returns Markup for the same reason).
                 "widget_html": Markup(html),
                 "widget_additional_css": [],
-                "widget_additional_js": [],
+                "widget_additional_js": list(additional_js or []),
             },
         )
 
@@ -312,6 +314,8 @@ class _PageView(CustomView):
 class DashboardView(_PageView):
     """Landing page: storage, task progress, the project table and a rescan button."""
 
+    STATUS_REFRESH_SECONDS = 30
+
     def __init__(self, services: Services) -> None:
         super().__init__(services)
         self.menu_label = "Dashboard"
@@ -322,7 +326,20 @@ class DashboardView(_PageView):
 
     @route("")
     async def index(self, request: Request) -> Response:  # noqa: D102 - rendered page
-        return self.render(request, self.body(request))
+        return self.render(
+            request,
+            self.body(request),
+            additional_js=[static_url(request, "js/dashboard-status.js", v="1")],
+        )
+
+    @route("/status")
+    async def status(self, request: Request) -> JSONResponse:
+        """Structured status for the dashboard's 30 s poller (admin session auth)."""
+        payload = await asyncio.to_thread(
+            self.services.status.snapshot,
+            getattr(self.services, "started_at", None),
+        )
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
     @route("/scan", methods=["POST"])
     async def scan(self, request: Request) -> Response:
@@ -401,12 +418,31 @@ class DashboardView(_PageView):
             f"<div><span class='text-muted'>usage</span> {usage['files']} files, "
             f"{_fmt_bytes(usage['bytes'])}</div>"
         )
+        status_cards = (
+            '<div class="row row-cards mt-3">'
+            + self._status_card(request, "server", "Server status")
+            + self._status_card(request, "inference", "Inference worker")
+            + "</div>"
+        )
         return (
             "".join(parts)
+            + status_cards
             + '<div class="row row-cards mt-3">'
             + f'<div class="col-lg-4">{_card("Storage", info)}</div>'
             + f'<div class="col-12">{_card("Projects", table, actions=scan)}</div>'
             + "</div>"
+        )
+
+    def _status_card(self, request: Request, kind: str, title: str) -> str:
+        """One JS-populated status card: the poller reads URL + interval from here."""
+        body = (
+            '<div class="zlabel-status-body text-muted">checking&hellip;</div>'
+            '<div class="zlabel-status-updated text-muted small mt-2"></div>'
+        )
+        return (
+            f'<div class="col-lg-6 zlabel-status" data-status-url="{_e(self.url(request, "/status"))}"'
+            f' data-refresh-ms="{self.STATUS_REFRESH_SECONDS * 1000}" data-status-kind="{_e(kind)}">'
+            f"{_card(title, body)}</div>"
         )
 
     # endregion

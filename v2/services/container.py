@@ -7,6 +7,7 @@ backend (or the whole container) instead of monkeypatching globals.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from v2.adapters.identity import build_identity
@@ -19,6 +20,7 @@ from v2.services.auth_service import AuthService
 from v2.services.image_store import ImageStore
 from v2.services.instance_service import InstanceService
 from v2.services.project_service import ProjectService
+from v2.services.status_service import StatusService
 from v2.services.task_service import TaskService
 
 
@@ -34,6 +36,8 @@ class Services:
     annotations: AnnotationService = field(init=False)
     images: ImageStore = field(init=False)
     inference: InferenceClient = field(init=False)
+    status: StatusService = field(init=False)
+    started_at: datetime | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         # replaced by ``build`` (the identity provider is constructed there)
@@ -46,6 +50,7 @@ class Services:
         )
         self.images = ImageStore(self.settings)
         self.inference = InferenceClient(self.settings)
+        self.status = StatusService(self.settings, self.db)
 
     @classmethod
     def build(cls, settings: Settings, db: Database, *, storage: Any = None) -> Services:

@@ -62,7 +62,8 @@ uv run ruff check . && uv run ruff format .
   project or its directory does not invalidate annotations.
 - Accounts are local (scrypt hashes in the `users` table); `/admin` manages them
   (Dashboard / Users / Projects / Files / Audit log), with project-scoped files,
-  members, labels and tasks on the project detail page.
+  members, labels and tasks on the project detail page. The Dashboard also shows
+  live **Server status** / **Inference worker** cards (polled via `/admin/status`).
 - The inference worker is a separate process: the API never holds model state
   (this removes v1's "predict on whatever task was loaded last" bug).
 - v1 is gone; its last state is the `onnx` branch (`fc04ef4`).

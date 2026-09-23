@@ -46,7 +46,8 @@ in `docs/architecture-v2.md` (read it before structural changes).
   0..N-1; `Label.id` is untouched). New labels are appended and get an unused palette
   colour (`v2/services/label_palette.py`); the colour control is a dropdown of
   swatch + hex entries plus a hex field (``#rrggbb``/``#rgb``/bare ``rrggbb``). **Dashboard** is the landing page: storage usage, progress, the project
-  table and a rescan button. The only remaining starlette-admin ``ModelView`` is the
+  table, a rescan button, and two status cards (**Server status** / **Inference
+  worker**) populated by `GET /admin/status` every 30 s from a shared static JS file. The only remaining starlette-admin ``ModelView`` is the
   read-only **Audit log** (its actor is a plain ``actor`` string field - the ``users``
   table has no ModelView, and a relation field without a target view is rejected).
   Tasks/Labels/Members/Storage/Accounts no longer exist as separate pages.
@@ -150,7 +151,8 @@ in `docs/architecture-v2.md` (read it before structural changes).
   (project-scoped instances: mirrored from documents + CRUD), `task_service`
   (listing, claim+lease, submit/review), `annotation_service` (versioned save,
   history), `image_store` (content-addressed uploads), `label_palette`
-  (auto-assigned label colours), `grouping`, `audit`, `container` (the `Services`
+  (auto-assigned label colours), `status_service` (DB/storage/worker probes +
+  the dashboard status JSON), `grouping`, `audit`, `container` (the `Services`
   dataclass built by `create_app`).
 - `v2/adapters/` — the swappable edges:
   * `storage.py`: the `StorageBackend` protocol (paths + IO methods, no credential

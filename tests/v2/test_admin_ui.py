@@ -826,3 +826,46 @@ def test_admin_ui_can_be_disabled(tmp_path):
 
 
 # endregion
+
+
+# region server status
+def test_status_endpoint_requires_admin_session(admin_client):
+    resp = admin_client.get("/admin/status", follow_redirects=False)
+    assert resp.status_code == 303 and "/admin/login" in resp.headers["location"]
+
+
+def test_status_endpoint_returns_structured_json(admin_client):
+    login(admin_client)
+    resp = admin_client.get("/admin/status")
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "no-store"
+    body = resp.json()
+
+    assert body["server"]["status"] == "ok"
+    assert set(body["server"]["checks"]) == {"db", "storage"}
+    assert body["server"]["checks"]["db"]["status"] == "ok"
+    assert body["server"]["checks"]["storage"]["status"] == "ok"
+    assert body["server"]["started_at"]
+    assert body["server"]["uptime_s"] >= 0
+    assert body["inference"]["configured"] is False
+    assert body["inference"]["status"] == "unconfigured"
+    assert body["checked_at"]
+    assert body["duration_ms"] >= 0
+
+
+def test_dashboard_renders_status_cards_and_static_js(admin_client):
+    login(admin_client)
+    page = admin_client.get("/admin/").text
+
+    assert 'data-status-url="/admin/status"' in page
+    assert 'data-refresh-ms="30000"' in page
+    assert 'data-status-kind="server"' in page
+    assert 'data-status-kind="inference"' in page
+    assert "/admin/static/js/dashboard-status.js" in page
+
+    js = admin_client.get("/admin/static/js/dashboard-status.js")
+    assert js.status_code == 200
+    assert "zlabel-status" in js.text
+
+
+# endregion

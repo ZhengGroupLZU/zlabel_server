@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from v2.api.v2 import health as health_module
+from v2.services.status_service import StatusService
 
 
 def test_health_reports_capabilities(client):
@@ -26,8 +26,9 @@ def test_health_is_cheap_by_default(client):
 
 def test_health_deep_reports_dependencies(client, monkeypatch):
     """Deep probes are aggregated and only a failure marks the app degraded."""
-    monkeypatch.setattr(health_module, "_check_storage", lambda s: {"status": "ok"})
-    monkeypatch.setattr(health_module, "_check_inference", lambda s: {"status": "unavailable"})
+    status = client.app.state.services.status
+    monkeypatch.setattr(status, "check_storage", lambda: {"status": "ok"})
+    monkeypatch.setattr(status, "check_inference", lambda: {"status": "unavailable"})
     body = client.get("/api/v2/health", params={"deep": "true"}).json()
 
     assert set(body["checks"]) == {"db", "storage", "inference"}
@@ -36,17 +37,16 @@ def test_health_deep_reports_dependencies(client, monkeypatch):
     assert body["status"] == "degraded"
 
 
-def test_health_probes_are_unconfigured_without_urls(settings):
+def test_health_probes_are_unconfigured_without_urls(settings, db):
     """An unconfigured inference worker reports "unconfigured"."""
-    from v2.api.v2 import health as mod
-
     plain = type(settings)(
         database_url="sqlite+pysqlite:///:memory:",
         storage_root=settings.storage_root,
         inference_url="",
     )
-    assert mod._check_storage(plain)["status"] == "ok"
-    assert mod._check_inference(plain) == {"status": "unconfigured"}
+    status = StatusService(plain, db)
+    assert status.check_storage()["status"] == "ok"
+    assert status.check_inference() == {"status": "unconfigured"}
 
 
 def test_request_id_is_echoed(client):
