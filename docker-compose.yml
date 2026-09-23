@@ -15,9 +15,9 @@ services:
       # the server owns the datasets: mount the host directory at ./data/storage
       - ZLSERVER_STORAGE_ROOT=/app/data/storage
       # first-run admin (only created when the account does not exist yet)
-      - ZLSERVER_PROJECT_ACCESS_MODE="open"
-      - ZLSERVER_BOOTSTRAP_ADMIN="admin"
-      - ZLSERVER_BOOTSTRAP_PASSWORD="<change-me>"
+      - ZLSERVER_PROJECT_ACCESS_MODE=open
+      - ZLSERVER_BOOTSTRAP_ADMIN=admin
+      - ZLSERVER_BOOTSTRAP_PASSWORD=<change-me>
       # the inference worker (separate service; see below / M3)
       - ZLSERVER_INFERENCE_URL=http://zlabel_inference:8001
       - ZLSERVER_INFERENCE_TIMEOUT=180
@@ -25,8 +25,8 @@ services:
       - ZLSERVER_INFERENCE_INLINE_IMAGES=true
       # web administration UI
       - ZLSERVER_ADMIN_ENABLED=true
-      - ZLSERVER_ADMIN_PATH="/admin"
-      - ZLSERVER_SECRET_KEY="<change-me>"
+      - ZLSERVER_ADMIN_PATH=/admin
+      - ZLSERVER_SECRET_KEY=<change-me>
     networks:
       zlabel_server_network:
         ipv4_address: 172.20.0.2
@@ -43,7 +43,7 @@ services:
       - ZLSERVER_MODEL_DIR=/app/assets/onnx
       - ZLSERVER_ORT_BACKEND=CUDA     # CPU CUDA (falls back to CPU if unavailable)
       - ZLSERVER_ORT_THREADS=8
-      - ZLSERVER_INFERENCE_TOKEN="<change-me>"
+      - ZLSERVER_INFERENCE_TOKEN=<change-me>
       - ZLSERVER_API_BASE_URL=http://zlabel_server:8000
       - ZLSERVER_EMBEDDING_CACHE_SIZE=8
       - ZLSERVER_MAX_CONCURRENCY=1
