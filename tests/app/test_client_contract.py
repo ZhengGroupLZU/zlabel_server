@@ -269,6 +269,25 @@ def test_get_image_returns_a_pil_image(api, harness):
     assert api.get_image("missing.png", project=PROJ) is None
 
 
+def test_get_image_max_side_contract(api, harness):
+    """``?max_side=`` is the display path: fewer bytes, full-resolution coordinates."""
+    import zlabel.utils.imagery as imagery
+
+    _login(api)
+    seed(harness, PROJ, files=())
+    harness.add_file(f"/zlabel_server/projects/{PROJ}/images/dish01/big.png", _png((1024, 512)))
+    api.scan(PROJ)
+
+    original = api.get_image("images/dish01/big.png", project=PROJ)
+    small = api.get_image("images/dish01/big.png", project=PROJ, max_side=256)
+
+    assert original is not None and original.size == (1024, 512)
+    assert small is not None and small.size == (256, 128)
+    # the client keeps drawing/annotating in stored-image pixels
+    assert imagery.original_size(small) == (1024, 512)
+    assert imagery.original_size(original) == (1024, 512)
+
+
 def test_predict_contract(api, harness, services):
     """What the desktop sends must be what the worker receives."""
     _login(api)

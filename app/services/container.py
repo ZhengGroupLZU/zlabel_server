@@ -17,6 +17,7 @@ from app.core.config import Settings
 from app.db.base import Database
 from app.services.annotation_service import AnnotationService
 from app.services.auth_service import AuthService
+from app.services.image_scaler import ImageScaler
 from app.services.image_store import ImageStore
 from app.services.instance_service import InstanceService
 from app.services.project_service import ProjectService
@@ -35,6 +36,7 @@ class Services:
     tasks: TaskService = field(init=False)
     annotations: AnnotationService = field(init=False)
     images: ImageStore = field(init=False)
+    scaler: ImageScaler = field(init=False)
     inference: InferenceClient = field(init=False)
     status: StatusService = field(init=False)
     started_at: datetime | None = field(default=None, init=False)
@@ -49,6 +51,7 @@ class Services:
             self.db, self.storage, self.projects, self.tasks, self.instances, self.settings
         )
         self.images = ImageStore(self.settings)
+        self.scaler = ImageScaler(self.settings)
         self.inference = InferenceClient(self.settings)
         self.status = StatusService(self.settings, self.db)
 

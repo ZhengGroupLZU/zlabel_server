@@ -38,6 +38,7 @@ def settings(tmp_path) -> Settings:
         database_url="sqlite+pysqlite:///:memory:",
         upload_dir=str(tmp_path / "uploads"),
         storage_root=str(tmp_path / "storage"),
+        image_cache_dir=str(tmp_path / "image_cache"),
         anno_dir=".zlabel/annos",
         inference_token="internal-secret",  # shared secret (API <-> worker)
         inference_url="",

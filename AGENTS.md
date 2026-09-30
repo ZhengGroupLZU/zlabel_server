@@ -114,6 +114,19 @@ in `docs/architecture-v2.md` (read it before structural changes).
   (`unauthorized`/`session_stale`/`forbidden`/`not_found`/`conflict`/`lease_conflict`/
   `validation_error`/`upstream_error`/`inference_unavailable`). A missing annotation
   is `404 not_found` = "not annotated yet" (safe for the client to create).
+- **Task images can be fetched downscaled** (`?max_side=<px>` on
+  `GET /projects/{p}/images/{rel_path}`, `app/services/image_scaler.py`): the desktop
+  draws a task at screen resolution, so pulling a 24 MP original just to paint it
+  wastes bandwidth. Absent/`0` serves the stored file byte-for-byte (the only mode
+  the admin UI uses); a smaller copy answers with `X-Image-Original-Size: WxH` — the
+  client maps its full-resolution annotation coordinates onto it — while
+  `X-Image-Sha256` keeps identifying the *stored* file. The ETag names the requested
+  variant (`"<size>-<modified>-m<max_side>"`), so a conditional request never runs the
+  scaler, and variants are cached under `ZLSERVER_IMAGE_CACHE_DIR` keyed by the stored
+  ETag + size. Never upscale, never rotate (Exif travels with the variant), and fall
+  back to the stored bytes when the file cannot be decoded - a scaling request must
+  not turn a readable task into an error. **Prediction always reads the stored file**,
+  so inference is unaffected. Advertised as the `images.scale` capability.
 - **Capabilities** in `GET /api/v2/health` (`app/api/v2/health.py: CAPABILITIES`):
   the desktop gates claim/review/version UI on them — add a capability whenever a
   new client-visible feature appears.
@@ -158,7 +171,8 @@ in `docs/architecture-v2.md` (read it before structural changes).
   `project_service` (discovery/sync, labels, progress), `instance_service`
   (project-scoped instances: mirrored from documents + CRUD), `task_service`
   (listing, claim+lease, submit/review), `annotation_service` (versioned save,
-  history), `image_store` (content-addressed uploads), `label_palette`
+  history), `image_store` (content-addressed uploads), `image_scaler` (on-demand
+  downscaled task images + their disk cache), `label_palette`
   (auto-assigned label colours), `status_service` (DB/storage/worker probes +
   the dashboard status JSON), `grouping`, `audit`, `container` (the `Services`
   dataclass built by `create_app`).

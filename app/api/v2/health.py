@@ -27,6 +27,10 @@ CAPABILITIES = [
     "annotations.versions",
     "labels.write",
     "predict.stateless",
+    # GET .../images/{rel_path}?max_side=<px>: task images can be fetched downscaled
+    # (the desktop draws them at screen resolution; annotation coordinates stay
+    # full-resolution via the X-Image-Original-Size header)
+    "images.scale",
 ]
 
 

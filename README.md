@@ -56,7 +56,7 @@ docker compose up -d          # API on :8000, inference worker on :8001 (interna
 docker compose logs -f zlabel_server
 ```
 
-`./data` (database, datasets, uploads) and `./assets/onnx` are mounted, never baked
+`./data` (database, datasets, uploads, downscaled image variants) and `./assets/onnx` are mounted, never baked
 into the image; the image only carries the code. `entrypoint.sh` does what the image
 cannot do alone — repair the ownership of the bind mount, drop privileges, migrate:
 

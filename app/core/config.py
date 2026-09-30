@@ -74,6 +74,14 @@ class Settings(BaseSettings):
 
     # --- images ------------------------------------------------------------
     max_upload_bytes: int = 64 * 1024 * 1024
+    # ``GET .../images/{rel_path}?max_side=``: downscale a task image on the fly so
+    # the desktop does not pull a full-resolution original just to draw it. Variants
+    # are cached under ``image_cache_dir`` (keyed by the stored file's ETag and the
+    # requested size), so only the first request pays for the encode. ``limit`` is a
+    # server-side ceiling: 0 = honour whatever size a client asks for.
+    image_max_side_limit: int = 4096
+    image_encode_quality: int = 85
+    image_cache_dir: str = "./data/image_cache"
 
     model_config = SettingsConfigDict(
         env_prefix="ZLSERVER_",

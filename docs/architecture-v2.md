@@ -145,7 +145,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 | `GET /api/v2/projects/{p}/my-stats` | session | 我名下各状态的任务数 |
 | `POST /api/v2/tasks/{anno_id}/reopen` | reviewer/admin | 已通过/已提交退回草稿（复核者改主意） |
 | `GET /api/v2/auth/users` · `PUT /api/v2/auth/users/{id}/role` | admin | 用户列表 / 改角色（改角色会撤销该用户会话） |
-| `GET /api/v2/projects/{p}/images/{rel_path:path}` | session | 取图（直接读存储树），支持 `ETag`/`If-None-Match`；**无副作用** |
+| `GET /api/v2/projects/{p}/images/{rel_path:path}` | session | 取图（直接读存储树），支持 `ETag`/`If-None-Match`；**无副作用**。`?max_side=<px>` 返回按长边降采样的副本（缺省/`0` = 存储文件原样），响应带 `X-Image-Original-Size: WxH`（客户端拿它把全分辨率标注坐标映射到小图），`X-Image-Sha256` 始终是**存储文件**的摘要；变体 ETag = `"<size>-<modified>-m<max_side>"`（条件请求不需解码），变体缓存在 `ZLSERVER_IMAGE_CACHE_DIR`（键 = 存储 ETag + 尺寸）；不放大、不旋转（Exif 随变体带走）、解码失败回退原字节。**预测始终读存储文件**，不受影响。能力位 `images.scale` |
 | `GET /api/v2/images/{sha256}` | session | 取回客户端上传过（内容寻址）的任务图像 |
 | `PUT /api/v2/projects/{p}/images/{rel_path:path}` | session | 本地上传（本地数据集 + 远端推理） |
 | `GET /api/v2/projects/{p}/annotations/{anno_id}` | session | 200 + `ETag: v{n}` / 404 = 未标注 |
