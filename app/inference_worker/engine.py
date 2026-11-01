@@ -10,6 +10,7 @@ and — more importantly — guarantees a job never runs on another task image's
 from __future__ import annotations
 
 import base64
+import hashlib
 import threading
 import time
 from collections import OrderedDict, deque
@@ -247,7 +248,7 @@ class InferenceEngine:
             self.metrics.image_cache_hits += 1
         else:
             content = self._load_image(job)
-            digest = digest or __import__("hashlib").sha256(content).hexdigest()
+            digest = digest or hashlib.sha256(content).hexdigest()
             image = self.images.get(digest)
             if image is None:
                 image = to_bgr(Image.open(BytesIO(content)))
