@@ -130,6 +130,7 @@ class ZSamWorker:
                 return self.postprocess_mask(
                     self.img,
                     min_contour_area_ratio=self.min_contour_area_ratio,
+                    binary=False,
                 )
             # whole image by SAM
             case x if x == AutoMode.SAM | AutoMode.CV:
@@ -160,6 +161,7 @@ class ZSamWorker:
                         self.img,
                         roi=rect,
                         min_contour_area_ratio=self.min_contour_area_ratio,
+                        binary=False,
                     )
                     results.extend(r)
             case x if x == AutoMode.SAM & AutoMode.CV:
@@ -169,6 +171,7 @@ class ZSamWorker:
                         roi=rect,
                         return_type=ReturnType.RECT,
                         min_contour_area_ratio=self.min_contour_area_ratio,
+                        binary=False,
                     )  # type: ignore
                     centers = [Point(x=rect.x + r.x + r.w / 2, y=rect.y + r.y + r.h / 2) for r in rects0]
                     for r in self.run_sam(points=[(p.x, p.y) for p in centers], labels=[1] * len(centers)):
@@ -190,6 +193,7 @@ class ZSamWorker:
         roi: Rect | None = None,
         return_type: ReturnType | None = None,
         min_contour_area_ratio: float = 1.0e-6,
+        binary: bool = True,
     ) -> Sequence[Rect | Polygon | str]:
         return_type = return_type or self.return_type
         # return RLE-encoded mask
@@ -209,8 +213,19 @@ class ZSamWorker:
         # pixels, whereas the previous dilate -> blur -> erode chain ended on a blurred,
         # un-thresholded mask whose nonzero halo counted as foreground and inflated every
         # contour (measured: +4.7% area on a seed, +17% on a thin bar).
-        _mask = cv2.medianBlur(_mask, 3)
-        _, _mask = cv2.threshold(_mask, 127, 255, cv2.THRESH_BINARY)
+        if binary:
+            # ``upscale_mask`` returns {0, 1}, so a 127 threshold would erase everything:
+            # normalise to {0, 255} first (a real {0, 255} mask is unchanged)
+            _mask = np.where(_mask > 0, 255, 0).astype(np.uint8)
+            _mask = cv2.medianBlur(_mask, 3)
+            _, _mask = cv2.threshold(_mask, 127, 255, cv2.THRESH_BINARY)
+        else:
+            # CV mode: the input is a grey image (the whole picture, or an ROI of it), so
+            # the user's threshold decides what is foreground. Inverted on purpose: the
+            # objects this app segments (seeds, roots, seedlings) are *darker* than the
+            # plate, so "below the threshold" is the object.
+            _, _mask = cv2.threshold(_mask, self.threshold, 255, cv2.THRESH_BINARY_INV)
+            _mask = cv2.medianBlur(_mask, 3)
         contours, _ = cv2.findContours(
             _mask,
             cv2.RETR_EXTERNAL,

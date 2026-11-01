@@ -130,3 +130,69 @@ class TestPostprocessMask:
         worker = make_worker(model)
         mask = np.zeros(IMG_SIZE, np.uint8)
         assert worker.postprocess_mask(mask, merge_one=True, return_type=ReturnType.RECT) == []
+
+
+class TestMaskNormalisation:
+    """The SAM family emits masks of {0,1}, not {0,255} (see ``upscale_mask``)."""
+
+    def _worker(self, mask, **kwargs):
+        import numpy as np
+
+        from inference.worker import ZSamWorker
+        from inference.ztypes import AutoMode, SamOnnxResult
+
+        class Model:
+            def predict(self, points=None, labels=None, bboxes=None, text=None, mask_input=None):
+                return [SamOnnxResult(mask=mask.astype(np.float32), score=0.9)]
+
+        return ZSamWorker(
+            model=Model(),
+            anno_id="a",
+            img=np.zeros(mask.shape + (3,), np.uint8),
+            auto_mode=AutoMode.SAM,
+            return_type=kwargs.pop("return_type", __import__("inference.ztypes", fromlist=["ReturnType"]).ReturnType.POLYGON),
+            min_contour_area_ratio=1e-6,
+            **kwargs,
+        )
+
+    def test_zero_one_mask_is_normalised_before_thresholding(self):
+        import cv2
+        import numpy as np
+
+        from inference.ztypes import Point
+
+        mask = np.zeros((120, 120), np.uint8)
+        cv2.circle(mask, (60, 60), 30, 1, -1)  # {0,1} exactly like upscale_mask
+        results = self._worker(mask).run_point([Point(x=60, y=60)], [1.0])
+        assert results, "a {0,1} mask was thresholded away and produced no polygon"
+        pts = np.array([[p.x, p.y] for p in results[0].points], np.float32)
+        assert abs(cv2.contourArea(pts)) == pytest.approx(int(np.count_nonzero(mask)), rel=0.02)
+
+    def test_cv_mode_segments_the_darker_object(self):
+        import cv2
+        import numpy as np
+
+        from inference.worker import ZSamWorker
+        from inference.ztypes import AutoMode, Point, ReturnType
+
+        img = np.full((120, 120, 3), 220, np.uint8)
+        cv2.rectangle(img, (40, 40), (80, 80), (10, 10, 10), -1)
+
+        class NoModel:
+            def predict(self, **_kwargs):  # pragma: no cover
+                raise AssertionError("CV mode must not run the model")
+
+        worker = ZSamWorker(
+            model=NoModel(),
+            anno_id="a",
+            img=img,
+            auto_mode=AutoMode.CV,
+            threshold=100,
+            return_type=ReturnType.POLYGON,
+            min_contour_area_ratio=1e-6,
+        )
+        results = worker.run_point([Point(x=60, y=60)], [1.0])
+        assert results
+        pts = np.array([[p.x, p.y] for p in results[0].points], np.float32)
+        x, y, w, h = cv2.boundingRect(np.round(pts).astype(np.int32))
+        assert 38 <= x <= 42 and 38 <= y <= 42 and 38 <= w <= 44

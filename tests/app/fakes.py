@@ -197,10 +197,11 @@ class FakeEnginePredictor:
         self.mask_inputs.append(mask_input)
         height, width = self.shape[:2]
         mask = np.zeros((height, width), np.uint8)
-        # a centred blob that always fits the image the encoder saw
+        # a centred blob that always fits the image the encoder saw. Values are 0/1 like
+        # the real runners (``upscale_mask`` thresholds to {0, 1}, not {0, 255}).
         y0, y1 = height // 4, max(height // 4 + 1, height * 3 // 4)
         x0, x1 = width // 4, max(width // 4 + 1, width * 3 // 4)
-        mask[y0:y1, x0:x1] = 255
+        mask[y0:y1, x0:x1] = 1
         # logits shaped like a real decoder's low_res_masks: +1 inside, -1 outside
         low = np.full((1, 256, 256), -1.0, np.float32)
         low[:, 64:192, 64:192] = 1.0
