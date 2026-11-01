@@ -286,3 +286,94 @@ def test_state_filter_accepts_a_list():
     assert _split_states("draft,rejected") == ["draft", "rejected"]
     assert _split_states(" approved ") == ["approved"]
     assert _split_states(None) == []
+
+
+# region per-request model + decoded image cache
+def test_decoded_image_is_reused_across_crops(engine, monkeypatch):
+    """A zoomed prompt crop makes every click a new job on the same 4000x6000 scan;
+    decoding it once per digest is what keeps ten clicks affordable."""
+    import app.inference_worker.engine as enginemod
+
+    decodes = []
+    real = enginemod.to_bgr
+
+    def counting(image):
+        decodes.append(image.size)
+        return real(image)
+
+    monkeypatch.setattr(enginemod, "to_bgr", counting)
+    engine.run(job("a" * 64, crop_box=[0, 0, 32, 32]))
+    engine.run(job("a" * 64, crop_box=[16, 16, 48, 48]))
+    engine.run(job("a" * 64))
+
+    assert len(decodes) == 1  # one decode, three crops
+    assert len(engine.images) == 1
+
+
+def test_the_requested_model_gets_its_own_predictor(engine, monkeypatch):
+    """`job.model` used to be ignored (the predictor was a start-up singleton)."""
+    import app.inference_worker.engine as enginemod
+
+    built = []
+
+    class Other(FakeEnginePredictor):
+        pass
+
+    def fake_predictor(**_kwargs):
+        model_name = _kwargs["model_name"]
+        built.append(model_name)
+        return Other()
+
+    monkeypatch.setattr(enginemod, "Predictor", fake_predictor)
+    settings_model = engine.settings.model_name
+
+    engine.run(job("a" * 64, model="SAM"))
+    engine.run(job("a" * 64, model="SAM"))
+    engine.run(job("a" * 64, model="SAM2"))
+
+    assert built == ["SAM", "SAM2"]  # built once per name, then reused
+    assert set(engine._predictors) == {"SAM", "SAM2"}
+    # the default-model job still uses the start-up predictor
+    engine.run(job("a" * 64))
+    assert engine.predictor.encoded  # untouched default predictor was used
+    assert settings_model  # (documented: settings.model_name stays the default)
+    # embeddings are namespaced per model: SAM and SAM2 encoded the same digest
+    assert engine.metrics.cache_misses >= 3
+
+
+# region interactive refinement (mask_input round trip)
+def test_low_res_logits_are_returned_and_fed_back(engine):
+    """A click refines the previous mask instead of redrawing it: the worker ships the
+    chosen candidate's logits back, the client echoes them as ``mask_input``."""
+    import numpy as np
+
+    from app.inference_worker.engine import encode_low_res
+
+    first = engine.run(job("a" * 64, want_low_res=True))
+    encoded = first["low_res"]
+    assert encoded and first["low_res_crop"] is None
+    back = np.frombuffer(__import__("base64").b64decode(encoded), dtype=np.float16)
+    assert back.size == 256 * 256
+    assert back.max() > 0 >= back.min()  # real logits, not a binary mask
+
+    second = engine.run(job("a" * 64, want_low_res=True, mask_input=encoded))
+    fed = engine.predictor.mask_inputs[-1]
+    assert fed is not None and fed.shape == (1, 1, 256, 256)
+    assert np.allclose(fed, back.astype(np.float32).reshape(1, 1, 256, 256))
+    assert second["low_res"]
+
+    # the flag is what makes the round trip happen: no flag, no payload
+    plain = engine.run(job("a" * 64))
+    assert "low_res" not in plain
+    assert engine.predictor.mask_inputs[-1] is None
+    assert encode_low_res(None) is None
+
+
+def test_mask_input_must_be_a_256_grid(engine):
+    import base64
+
+    import numpy as np
+
+    bad = base64.b64encode(np.zeros(16, np.float16).tobytes()).decode("ascii")
+    with pytest.raises(ValidationFailed):
+        engine.run(job("a" * 64, mask_input=bad))

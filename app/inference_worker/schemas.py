@@ -28,6 +28,11 @@ class InferJob(BaseModel):
     mode: int = 1  # AutoMode: 1 SAM, 2 CV, 3 SAM+CV
     return_type: int = 1  # 1 RECT, 2 POLYGON, 3 RLE
     crop_box: list[float] | None = None  # (left, top, right, bottom) in image pixels
+    #: base64 float16 (256, 256) logits of the previous prediction for the same crop:
+    #: the decoder refines that mask instead of drawing a new one
+    mask_input: str | None = None
+    #: return this prediction's own logits so the client can echo them back
+    want_low_res: bool = False
 
 
 class CacheOut(BaseModel):

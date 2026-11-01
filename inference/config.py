@@ -28,7 +28,11 @@ class InferenceSettings(BaseSettings):
     contour_min_points: int = 10
     contour_max_points: int = 100
     contour_max_iterations: int = 10
-    min_contour_area_ratio: float = 3.0e-5
+    # Relative to the *crop* area, and the desktop now sends prompt-sized crops (a
+    # 512 px seed window instead of the whole 4000x6000 plate): the old 3e-5 kept
+    # 8 px² blobs there, which SAM happily produces as specks. 2e-4 is ~50 px² of a
+    # 512 crop - still far below a 90 px seed (~6000 px²) or a thin root.
+    min_contour_area_ratio: float = 2.0e-4
 
     # --- worker -------------------------------------------------------------
     host: str = "0.0.0.0"
@@ -41,6 +45,10 @@ class InferenceSettings(BaseSettings):
     api_base_url: str = "http://127.0.0.1:8000"
     # embeddings are cached by image sha256; this bounds that cache
     embedding_cache_size: int = 32
+    # decoded task images kept in memory, keyed by content digest. A 4000x6000 scan
+    # costs ~0.5-1 s to decode and a zoomed prompt crop makes that per click; one
+    # entry is ~72 MB, so keep this small (2-4) unless the machine has the RAM.
+    decoded_image_cache_size: int = 2
     # how many requests the worker runs concurrently (1 = serialise, safest for
     # the SAM3 CUDA arena; raise only with enough VRAM)
     max_concurrency: int = 1

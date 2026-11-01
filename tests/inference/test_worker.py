@@ -17,7 +17,7 @@ class MaskPredictor:
         self.boxes = boxes
         self.calls = []
 
-    def predict(self, points=None, labels=None, bboxes=None, text=None, conf=None, iou=None):
+    def predict(self, points=None, labels=None, bboxes=None, text=None, conf=None, iou=None, mask_input=None):
         self.calls.append((points, labels, bboxes, text))
         return [
             SamOnnxResult(mask=blob_mask(IMG_SIZE, box=b).astype(np.float32), score=0.9) for b in self.boxes

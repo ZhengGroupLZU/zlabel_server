@@ -102,6 +102,63 @@ class EmbeddingCache:
         return key in self._items
 
 
+class DecodedImageCache:
+    """LRU of decoded task images, keyed by content digest.
+
+    Reading and decoding a 4000x6000 PNG costs ~0.5-1 s; a zoomed prompt crop makes
+    that per click (ten seeds per plate), and the bytes never change for a digest. The
+    cropped slice itself is cheap, so only the full decoded BGR array is cached.
+
+    Memory: one 4000x6000 BGR array is ~72 MB, hence the small default size.
+    """
+
+    def __init__(self, size: int) -> None:
+        self.size = max(0, int(size))
+        self._items: OrderedDict[str, np.ndarray] = OrderedDict()
+
+    def get(self, key: str) -> np.ndarray | None:
+        state = self._items.get(key)
+        if state is not None:
+            self._items.move_to_end(key)
+        return state
+
+    def put(self, key: str, image: np.ndarray) -> None:
+        if self.size <= 0:
+            return
+        self._items[key] = image
+        self._items.move_to_end(key)
+        while len(self._items) > self.size:
+            self._items.popitem(last=False)
+
+    def clear(self) -> None:
+        self._items.clear()
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+
+LOW_RES_SHAPE = (1, 1, 256, 256)
+
+
+def decode_mask_input(encoded: str | None) -> np.ndarray | None:
+    """base64 float16 (256, 256) logits -> float32 decoder input; None when absent."""
+    if not encoded:
+        return None
+    raw = base64.b64decode(encoded)
+    arr = np.frombuffer(raw, dtype=np.float16).astype(np.float32)
+    if arr.size != LOW_RES_SHAPE[2] * LOW_RES_SHAPE[3]:
+        raise ValidationFailed(f"mask_input must hold {LOW_RES_SHAPE[2]}x{LOW_RES_SHAPE[3]} values")
+    return arr.reshape(LOW_RES_SHAPE)
+
+
+def encode_low_res(low_res) -> str | None:
+    """float logits -> base64 float16 (half the bytes; logits do not need fp32)."""
+    if low_res is None:
+        return None
+    arr = np.asarray(low_res, np.float32).reshape(LOW_RES_SHAPE[2], LOW_RES_SHAPE[3])
+    return base64.b64encode(arr.astype(np.float16).tobytes()).decode("ascii")
+
+
 def to_bgr(image: Image.Image) -> np.ndarray:
     """PIL (RGB) → OpenCV-style BGR, the layout the runners expect."""
     return np.asarray(image.convert("RGB"), dtype=np.uint8)[..., ::-1].copy()
@@ -141,9 +198,13 @@ class InferenceEngine:
             iou=settings.sam3_iou,
         )
         self.cache = cache or EmbeddingCache(settings.embedding_cache_size)
+        self.images = DecodedImageCache(getattr(settings, "decoded_image_cache_size", 2))
+        #: per-request model selection: ``job.model`` picks one of these
+        self._predictors: dict[str, Predictor] = {}
         self._fetch = fetch or requests.get
         self.metrics = EngineMetrics()
         self._current_key = ""
+        self._current_model = ""
         self._admit_lock = threading.Lock()
         self._waiting = 0
         self._slot = threading.Semaphore(max(1, settings.max_concurrency))
@@ -170,23 +231,30 @@ class InferenceEngine:
         return payload
 
     def _run_locked(self, job: InferJob) -> dict[str, Any]:
+        predictor = self._predictor_for(job.model)
         content = self._load_image(job)
-        image = to_bgr(Image.open(BytesIO(content)))
+        digest = job.image_sha256 or __import__("hashlib").sha256(content).hexdigest()
+        image = self.images.get(digest)
+        if image is None:
+            image = to_bgr(Image.open(BytesIO(content)))
+            self.images.put(digest, image)
         crop = self._crop_box(job, image.shape)
         offset = (0.0, 0.0)
+        # a crop is a view, not a copy: the encoder copies what it needs
+        region = image
         if crop is not None:
             left, top, right, bottom = crop
-            image = image[top:bottom, left:right]
+            region = image[top:bottom, left:right]
             offset = (left, top)
 
-        key = self._cache_key(job, content, crop)
-        self._ensure_embedding(key, image)
+        key = self._cache_key(job, digest, crop)
+        self._ensure_embedding(predictor, key, region)
 
         mode, return_type = self._modes(job)
         worker = ZSamWorker(
-            model=self.predictor,
+            model=predictor,
             anno_id=job.anno_id,
-            img=image,
+            img=region,
             auto_mode=mode,
             threshold=job.threshold,
             return_type=return_type,
@@ -198,13 +266,20 @@ class InferenceEngine:
         data = self._dispatch(worker, job, mode, offset)
         if offset != (0.0, 0.0):
             data = shift_results(data, *offset)
-        return SamReturn(
+        payload = SamReturn(
             anno_id=job.anno_id,
             status=True,
             mode=mode.name,
             msg="success",
             data=list(data),
         ).model_dump()
+        if job.want_low_res:
+            # the client echoes this back as ``mask_input`` on the next click; it is
+            # crop-space (the decoder sees the crop), which is fine as long as the
+            # client only reuses it for the same crop_box
+            payload["low_res"] = encode_low_res(getattr(worker, "last_low_res", None))
+            payload["low_res_crop"] = list(crop) if crop is not None else None
+        return payload
 
     def _dispatch(
         self, worker: ZSamWorker, job: InferJob, mode: AutoMode, offset: tuple[float, float] = (0.0, 0.0)
@@ -225,23 +300,53 @@ class InferenceEngine:
                 points = [Point(x=p.x + dx, y=p.y + dy) for p in points]
             if mode not in (AutoMode.SAM, AutoMode.CV):
                 raise ValidationFailed("point prompts support mode=1 (SAM) or mode=2 (CV)")
-            return worker.run_point(points, list(prompts.labels or [1] * len(points)))
+            return worker.run_point(
+                points,
+                list(prompts.labels or [1] * len(points)),
+                mask_input=decode_mask_input(job.mask_input),
+            )
         raise ValidationFailed("the job carries no prompts (points/rects/texts)")
 
-    def _ensure_embedding(self, key: str, image: np.ndarray) -> bool:
+    def _ensure_embedding(self, predictor: Predictor, key: str, image: np.ndarray) -> bool:
         """Restore the cached snapshot or encode once; returns True on a hit."""
         state = self.cache.get(key)
         if state is not None:
             if key != self._current_key:
-                self.predictor.import_image_state(state)
+                predictor.import_image_state(state)
                 self._current_key = key
             self.metrics.cache_hits += 1
             return True
-        self.predictor.set_image(image)
-        self.cache.put(key, self.predictor.export_image_state())
+        predictor.set_image(image)
+        self.cache.put(key, predictor.export_image_state())
         self._current_key = key
         self.metrics.cache_misses += 1
         return False
+
+    def _predictor_for(self, name: str | None) -> Predictor:
+        """The predictor for one request (``job.model``), built lazily and kept warm.
+
+        The model used to be fixed at start-up, so the client's model choice only
+        worked in local mode. A plate of seeds wants the 3x-downsampled EdgeSAM even
+        less than a person does, and the machine has a GPU, so the choice has to travel
+        with the request.
+        """
+        wanted = (name or self.settings.model_name or "").strip()
+        if not wanted or wanted == self.settings.model_name:
+            return self.predictor
+        cached = self._predictors.get(wanted)
+        if cached is not None:
+            return cached
+        logger.info(f"loading inference model {wanted} on demand")
+        built = Predictor(
+            model_dir=self.settings.model_dir,
+            model_name=wanted,
+            backend=self.settings.ort_backend,
+            threads=self.settings.ort_threads,
+            conf=self.settings.sam3_conf,
+            iou=self.settings.sam3_iou,
+        )
+        self._predictors[wanted] = built
+        return built
 
     # endregion
 
@@ -281,9 +386,15 @@ class InferenceEngine:
             return None
         return left, top, right, bottom
 
-    def _cache_key(self, job: InferJob, content: bytes, crop: tuple[int, int, int, int] | None) -> str:
-        digest = job.image_sha256 or __import__("hashlib").sha256(content).hexdigest()
-        return digest if crop is None else f"{digest}#{crop[0]},{crop[1]},{crop[2]},{crop[3]}"
+    def _cache_key(self, job: InferJob, digest: str, crop: tuple[int, int, int, int] | None) -> str:
+        """Embeddings belong to one (model, image bytes, crop) triple.
+
+        The model name is part of the key: two models produce different features for the
+        same pixels, and a shared snapshot would silently feed one to the other.
+        """
+        model = (job.model or self.settings.model_name or "").strip() or "default"
+        crop_part = "" if crop is None else "#" + ",".join(str(int(v)) for v in crop)
+        return f"{model}|{digest}{crop_part}"
 
     @staticmethod
     def _points(raw: list[Any]) -> list[Point]:
@@ -328,12 +439,14 @@ class InferenceEngine:
         return {
             "status": "ok",
             "model": self.settings.model_name,
+            "models": sorted({self.settings.model_name, *self._predictors}),
             "backend": self.settings.ort_backend,
             "loaded": self.predictor.loaded,
             "cache": {
                 "size": self.cache.size,
                 "entries": len(self.cache),
                 "hit_rate": self.metrics.hit_rate,
+                "decoded_images": len(self.images),
             },
             "queue": {
                 "waiting": self._waiting,

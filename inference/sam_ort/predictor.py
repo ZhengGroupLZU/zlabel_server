@@ -122,10 +122,16 @@ class Predictor:
         text: list | str | None = None,
         conf: float | None = None,
         iou: float | None = None,
+        mask_input=None,
     ) -> list[SamOnnxResult]:
-        """Run inference and return a flat list of SamOnnxResult (mask/score/box)."""
+        """Run inference and return a flat list of SamOnnxResult (mask/score/box).
+
+        ``mask_input`` is the previous prediction's low-resolution logits: passing it back
+        makes the decoder *refine* that mask for the new point/box prompts instead of
+        drawing a new one.
+        """
         with self._lock:
-            return self._predict_unsafe(points, labels, bboxes, text, conf, iou)
+            return self._predict_unsafe(points, labels, bboxes, text, conf, iou, mask_input)
 
     def _predict_unsafe(
         self,
@@ -135,6 +141,7 @@ class Predictor:
         text: list | str | None = None,
         conf: float | None = None,
         iou: float | None = None,
+        mask_input=None,
     ) -> list[SamOnnxResult]:
         self.setup_model()
         if conf is not None:
@@ -150,17 +157,18 @@ class Predictor:
 
         if points is None and bboxes is None:
             raise ValueError("provide at least one of points=, bboxes= or text=")
-        return self._run_points_boxes(points, labels, bboxes)
+        return self._run_points_boxes(points, labels, bboxes, mask_input)
 
-    def _run_points_boxes(self, points, labels, bboxes) -> list[SamOnnxResult]:
+    def _run_points_boxes(self, points, labels, bboxes, mask_input=None) -> list[SamOnnxResult]:
         results: list[SamOnnxResult] = []
         if bboxes:
             for b in bboxes:
-                results.extend(_to_results(self._runner.segment_box([float(v) for v in b])))
+                results.extend(_to_results(self._runner.segment_box([float(v) for v in b], mask_input)))
+                mask_input = None  # one mask_input per prompt, not a chain over boxes
         if points:
             pts = [tuple(float(v) for v in p) for p in points]
             lbs = list(labels) if labels is not None else [1] * len(pts)
-            results.extend(_to_results(self._runner.segment_points(pts, lbs)))
+            results.extend(_to_results(self._runner.segment_points(pts, lbs, mask_input)))
         return results
 
     def __call__(self, *args, **kwargs):

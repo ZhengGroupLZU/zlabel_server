@@ -107,10 +107,10 @@ class FakeRunner:
             return segment_text
         raise AttributeError(name)
 
-    def segment_points(self, points, labels):
+    def segment_points(self, points, labels, mask_input=None):
         self.calls.append(("segment_points", points, labels))
         return []
 
-    def segment_box(self, box):
+    def segment_box(self, box, mask_input=None):
         self.calls.append(("segment_box", box))
         return []

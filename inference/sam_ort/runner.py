@@ -40,6 +40,23 @@ SAM3_GEO_MAX_BOXES = 4
 SAM3_PVS_MAX_POINTS = 4
 
 
+MASK_INPUT_SIZE = 256
+
+
+def _as_mask_input(mask_input) -> np.ndarray:
+    """Normalise a previous mask prediction into the decoder's ``(1, 1, 256, 256)`` input.
+
+    ``mask_input`` carries *logits*, not a binary mask: values above ~0 mean "inside".
+    A binary mask converted to +/-1 also works and is what a client without the logits
+    can send, but the real logits refine better - SAM uses their magnitude as
+    confidence, so a fuzzy edge stays fuzzy instead of snapping to a hard contour.
+    """
+    if mask_input is None:
+        return np.zeros((1, 1, MASK_INPUT_SIZE, MASK_INPUT_SIZE), np.float32)
+    arr = np.asarray(mask_input, np.float32).reshape(1, 1, MASK_INPUT_SIZE, MASK_INPUT_SIZE)
+    return arr
+
+
 def _box_to_points(box_xyxy_px) -> tuple[list[tuple[float, float]], list[float]]:
     x1, y1, x2, y2 = (float(v) for v in box_xyxy_px)
     return [(x1, y1), (x2, y2)], [2.0, 3.0]
@@ -103,7 +120,7 @@ class _SamDecoderMixin(_ImageStateMixin):
             self._decoder = OrtSession(self._decoder_path, backend=self._backend, threads=self._threads)
         return self._decoder
 
-    def _run_decoder(self, point_coords, point_labels) -> list[SamOnnxResult]:
+    def _run_decoder(self, point_coords, point_labels, mask_input=None) -> list[SamOnnxResult]:
         decoder = self._new_decoder()
         feeds: dict[str, np.ndarray] = {}
         for name in decoder.input_names:
@@ -114,9 +131,9 @@ class _SamDecoderMixin(_ImageStateMixin):
             elif name == "point_labels":
                 feeds[name] = point_labels
             elif name == "mask_input":
-                feeds[name] = np.zeros((1, 1, 256, 256), np.float32)
+                feeds[name] = _as_mask_input(mask_input)
             elif name == "has_mask_input":
-                feeds[name] = np.zeros((1,), np.float32)
+                feeds[name] = np.ones((1,), np.float32) if mask_input is not None else np.zeros((1,), np.float32)
             elif name == "orig_im_size":
                 # SAM/SlimSAM decoders resize masks to orig_im_size. For letterboxed
                 # input feed the padded size and crop the padding back afterwards
@@ -139,11 +156,14 @@ class _SamDecoderMixin(_ImageStateMixin):
             )
         )
         debug_save.save_image("03_raw_mask", masks[0], prompt_scale=raw_scale)
+        low_masks = out.get("low_res_masks")
+        low_masks = None if low_masks is None else low_masks[0]
         results = []
-        for mask, score in zip(masks, scores):
+        for i, (mask, score) in enumerate(zip(masks, scores)):
             up = self._upscale(mask)
             debug_save.save_image("04_final_mask", up)
-            results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(score)))
+            low = None if low_masks is None else np.asarray(low_masks[i], np.float32)[None]
+            results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(score), low_res=low))
         return sorted(results, key=lambda r: r.score, reverse=True)
 
     def _upscale(self, mask: np.ndarray) -> np.ndarray:
@@ -151,16 +171,16 @@ class _SamDecoderMixin(_ImageStateMixin):
             return upscale_mask_pad(mask, self._orig_shape)
         return upscale_mask(mask, self._orig_shape)
 
-    def segment_points(self, points, labels) -> list[SamOnnxResult]:
+    def segment_points(self, points, labels, mask_input=None) -> list[SamOnnxResult]:
         debug_save.set_prompt(points=points, labels=labels)
         coord, lbl = self._transform_points(points, labels)
-        return self._run_decoder(coord, lbl)
+        return self._run_decoder(coord, lbl, mask_input)
 
-    def segment_box(self, box_xyxy_px) -> list[SamOnnxResult]:
+    def segment_box(self, box_xyxy_px, mask_input=None) -> list[SamOnnxResult]:
         debug_save.set_prompt(boxes=[box_xyxy_px])
         pts, lbs = _box_to_points(box_xyxy_px)
         coord, lbl = self._transform_points(pts, lbs)
-        return self._run_decoder(coord, lbl)
+        return self._run_decoder(coord, lbl, mask_input)
 
 
 class SamRunner(_SamDecoderMixin):
@@ -228,7 +248,7 @@ class Sam2Runner(_SamDecoderMixin):
             out["high_res_feats_1"],
         )
 
-    def _run_decoder(self, point_coords, point_labels) -> list[SamOnnxResult]:
+    def _run_decoder(self, point_coords, point_labels, mask_input=None) -> list[SamOnnxResult]:
         decoder = self._new_decoder()
         feeds: dict[str, np.ndarray] = {}
         for name in decoder.input_names:
@@ -243,20 +263,23 @@ class Sam2Runner(_SamDecoderMixin):
             elif name == "point_labels":
                 feeds[name] = point_labels
             elif name == "mask_input":
-                feeds[name] = np.zeros((1, 1, 256, 256), np.float32)
+                feeds[name] = _as_mask_input(mask_input)
             elif name == "has_mask_input":
-                feeds[name] = np.zeros((1,), np.float32)
+                feeds[name] = np.ones((1,), np.float32) if mask_input is not None else np.zeros((1,), np.float32)
             else:
                 raise ValueError(f"unexpected SAM2 decoder input: {name}")
         out = decoder.run(feeds)
         masks = out["masks"][0]  # (N, 256, 256)
         scores = out["iou_predictions"][0]
         debug_save.save_image("03_raw_mask", masks[0], prompt_scale=(self._ratio, self._ratio))
+        low_masks = out.get("low_res_masks")
+        low_masks = None if low_masks is None else low_masks[0]
         results = []
-        for mask, score in zip(masks, scores):
+        for i, (mask, score) in enumerate(zip(masks, scores)):
             up = self._upscale(mask)
             debug_save.save_image("04_final_mask", up)
-            results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(score)))
+            low = None if low_masks is None else np.asarray(low_masks[i], np.float32)[None]
+            results.append(SamOnnxResult(mask=up.astype(np.float32), score=float(score), low_res=low))
         return sorted(results, key=lambda r: r.score, reverse=True)
 
 

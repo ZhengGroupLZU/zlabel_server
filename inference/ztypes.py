@@ -114,6 +114,11 @@ class SamOnnxResult:
     mask: NDArray[np.float32]
     score: float
     box: tuple[float, float, float, float] | None = None
+    #: the decoder's raw (1, 256, 256) logits for this candidate. Echoing them back as
+    #: ``mask_input`` is what lets the next click *refine* a mask instead of redrawing
+    #: it; None when the exported decoder does not expose ``low_res_masks``
+    #: (EdgeSAM/SAM2) or the model is not a SAM-family prompt decoder (SAM3 PVS).
+    low_res: NDArray[np.float32] | None = None
 
 
 @dataclass

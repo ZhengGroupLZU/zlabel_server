@@ -88,17 +88,22 @@ class ZSamWorker:
         self,
         points: list[Point],
         labels: list[float],
+        mask_input=None,
     ) -> Sequence[Rect | Polygon | str]:
+        #: low-resolution logits of the mask this call chose (None when the decoder does
+        #: not expose them); the engine ships them back so the next click can refine
+        self.last_low_res = None
         final_results: list[Rect | Polygon | str] = []
         match self.auto_mode:
             # single point
             case AutoMode.SAM:
                 # regard multiple points as single point
                 pts = [(p.x, p.y) for p in points]
-                results = self.run_sam(points=pts, labels=labels)
+                results = self.model.predict(points=pts, labels=labels, mask_input=mask_input)
                 # SAM returns several candidate masks per point; keep only the
                 # highest-scoring one to avoid near-identical overlays.
                 if results:
+                    self.last_low_res = getattr(results[0], "low_res", None)
                     final_results.extend(
                         self.postprocess_mask(
                             results[0].mask.astype(np.uint8),

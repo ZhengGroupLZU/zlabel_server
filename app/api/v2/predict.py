@@ -96,6 +96,10 @@ async def predict(
         "mode": int(payload.get("mode", 1)),
         "return_type": int(payload.get("return_type", 1)),
         "crop_box": payload.get("crop_box"),
+        # interactive refinement: the previous prediction's logits come back in, this
+        # prediction's own logits go out (both crop-space, base64 float16)
+        "mask_input": payload.get("mask_input"),
+        "want_low_res": bool(payload.get("want_low_res")),
     }
     logger.info(f"predict anno_id={payload['anno_id']} sha={digest[:12]} mode={job['mode']}")
     return services.inference.infer(job)
