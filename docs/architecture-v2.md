@@ -181,6 +181,11 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 - **embedding 缓存 key = 图像 sha256（+ crop）**：runner 暴露 `export_image_state()/import_image_state()`，把编码结果（SAM 的 `image_embeddings`、SAM2 的 `image_embed/high_res_*`、SAM3 的 `img/pcs/pvs feats`）整体快照；命中时**直接恢复**而非重算（`EmbeddingCache`，LRU，`ZLSERVER_EMBEDDING_CACHE_SIZE`）。同一张图第二次点击零编码，且每个 job 只可能用自己那个任务的图像编码。
 - worker 暴露 `GET /health`（模型/设备/是否已加载/缓存与队列深度，无需鉴权）与 `GET /metrics`（jobs/errors/命中率/p50-p95/max/uptime，需内部 token）。
 - 取图两种方式：默认 `ZLSERVER_INFERENCE_INLINE_IMAGES=true` 随 job 内联；置 false 则 API 把任务图像写进内容寻址缓存并给 `image_url`，worker 在**缓存未命中时**才拉（`GET /api/v2/internal/images/{sha}`，内部 token 鉴权）。
+- **逐粒标注场景请把 `ZLSERVER_INFERENCE_INLINE_IMAGES` 设为 false**：客户端现在只发送提示大小的裁剪框（种子约 512 px），于是"一张图上的每一次点击"都是一个 job。内联模式下每个 job 都要把这 30 MB 的原图 base64 后随请求搬运（≈40 MB JSON），实测单次 0.9–2.0 s；改成拉取模式后，三层缓存才会真正生效：
+  1. API 侧 `PathDigestCache`（`(path, size-mtime etag) -> sha256`）：重复点击不再读取/哈希存储里的整张图（换图时 etag 变化会自动失效）；
+  2. worker 侧 `DecodedImageCache`（`sha256 -> BGR ndarray`）：命中时**连拉取都不做**，只切 crop；
+  3. `EmbeddingCache`（`sha256#crop -> 编码快照`）：同一裁剪窗口的连续点击不重跑 encoder。
+  命中链完整时一次 predict 只剩 encoder+decoder 的时间。
 - `mode` 校验前置（不再 500）：点提示只接受 1(SAM)/2(CV)，框提示接受 0/1/2/3，文本只接受 1；`mode=0` 是客户端"同时勾选 SAM+OpenCV"的历史值，按旧语义交给框路径。
 - 模型参数沿用 v1：`ZLSERVER_MODEL_NAME/DIR/BACKEND`、SAM3 conf/iou、轮廓后处理参数（与桌面端逐像素对齐的预处理逻辑保持不变）。
 - 降级：worker 不可达 → `503 inference_unavailable`，客户端提示"推理不可用，可继续手动标注"（不再 500）。

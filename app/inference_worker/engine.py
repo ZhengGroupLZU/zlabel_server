@@ -41,6 +41,9 @@ class EngineMetrics:
     errors: int = 0
     cache_hits: int = 0
     cache_misses: int = 0
+    #: decoded-image cache (skips re-transferring and re-decoding the stored file)
+    image_cache_hits: int = 0
+    image_cache_misses: int = 0
     latencies: deque[float] = field(default_factory=lambda: deque(maxlen=200))
     started_at: float = field(default_factory=time.time)
 
@@ -56,6 +59,8 @@ class EngineMetrics:
             "errors": self.errors,
             "cache_hits": self.cache_hits,
             "cache_misses": self.cache_misses,
+            "image_cache_hits": self.image_cache_hits,
+            "image_cache_misses": self.image_cache_misses,
             "cache_hit_rate": self.hit_rate,
             "latency_ms": {
                 "p50": self._pct(latencies, 0.5),
@@ -232,12 +237,22 @@ class InferenceEngine:
 
     def _run_locked(self, job: InferJob) -> dict[str, Any]:
         predictor = self._predictor_for(job.model)
-        content = self._load_image(job)
-        digest = job.image_sha256 or __import__("hashlib").sha256(content).hexdigest()
-        image = self.images.get(digest)
-        if image is None:
-            image = to_bgr(Image.open(BytesIO(content)))
-            self.images.put(digest, image)
+        # The API already tells us the content digest, so a plate we have decoded before
+        # never gets pulled again: ``_load_image`` transfers the whole stored file (a
+        # 4000x6000 PNG is ~30 MB) and used to run on *every* job - a zoomed prompt crop
+        # makes that per click, and the transfer, not the decode, was the ~1 s.
+        digest = (job.image_sha256 or "").strip()
+        image = self.images.get(digest) if digest else None
+        if image is not None:
+            self.metrics.image_cache_hits += 1
+        else:
+            content = self._load_image(job)
+            digest = digest or __import__("hashlib").sha256(content).hexdigest()
+            image = self.images.get(digest)
+            if image is None:
+                image = to_bgr(Image.open(BytesIO(content)))
+                self.images.put(digest, image)
+                self.metrics.image_cache_misses += 1
         crop = self._crop_box(job, image.shape)
         offset = (0.0, 0.0)
         # a crop is a view, not a copy: the encoder copies what it needs

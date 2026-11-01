@@ -178,3 +178,69 @@ def test_internal_endpoint_requires_configuration(client, services):
 
 
 # endregion
+
+
+def test_a_repeat_predict_does_not_re_read_the_stored_image(client, auth_headers, harness, services):
+    """The digest is memoised per (path, stat etag): a zoomed crop per click must not
+    pull the whole stored file again."""
+    ctx = bootstrap(client, auth_headers, harness, services)
+    task = ctx["items"][0]
+    # the skip only exists when the worker pulls the image itself: an inline job carries
+    # the bytes in its payload by definition
+    services.settings.inference_inline_images = False
+    reads = []
+    real_get = services.storage.get_bytes
+
+    def counting(path):
+        reads.append(path)
+        return real_get(path)
+
+    services.storage.get_bytes = counting
+    for _ in range(3):
+        resp = client.post(
+            PREDICT,
+            data={"data": payload(task["anno_id"], rel_path=task["rel_path"])},
+            headers=ctx["headers"],
+        )
+        assert resp.status_code == 200, resp.text
+    assert len(reads) == 1  # three clicks, one read of the stored image
+    assert len(services.digests) == 1
+
+
+def test_a_replaced_image_gets_a_new_digest(client, auth_headers, harness, services):
+    """A newer file under the same path must not reuse the old digest (stale embeddings)."""
+    ctx = bootstrap(client, auth_headers, harness, services)
+    task = ctx["items"][0]
+    path = services.storage.image_path("projA", task["rel_path"])
+    first_etag = services.storage.file_info(path).etag
+    services.digests.put(path, first_etag, "0" * 64)  # pretend an old digest was cached
+    before = services.digests.get(path, first_etag)
+    assert before == "0" * 64
+
+    # a changed file has a different etag, so the stale entry no longer answers
+    services.storage.put_bytes(path, b"a-different-image")
+    resp = client.post(
+        PREDICT, data={"data": payload(task["anno_id"], rel_path=task["rel_path"])}, headers=ctx["headers"]
+    )
+    assert resp.status_code == 200, resp.text
+    assert services.digests.get(path, services.storage.file_info(path).etag) != "0" * 64
+
+
+def test_an_inline_job_still_reads_the_image(client, auth_headers, harness, services):
+    """With inline images the bytes travel in the job, so the read cannot be skipped."""
+    ctx = bootstrap(client, auth_headers, harness, services)
+    task = ctx["items"][0]
+    assert services.settings.inference_inline_images is True  # the documented default
+    reads = []
+    real_get = services.storage.get_bytes
+
+    def counting(path):
+        reads.append(path)
+        return real_get(path)
+
+    services.storage.get_bytes = counting
+    for _ in range(2):
+        client.post(
+            PREDICT, data={"data": payload(task["anno_id"], rel_path=task["rel_path"])}, headers=ctx["headers"]
+        )
+    assert len(reads) == 2  # inline mode pays the read per request by design

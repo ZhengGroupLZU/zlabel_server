@@ -377,3 +377,29 @@ def test_mask_input_must_be_a_256_grid(engine):
     bad = base64.b64encode(np.zeros(16, np.float16).tobytes()).decode("ascii")
     with pytest.raises(ValidationFailed):
         engine.run(job("a" * 64, mask_input=bad))
+
+
+def test_a_decoded_plate_is_never_pulled_twice(engine, monkeypatch):
+    """The 30 MB stored file must not cross the wire again once its pixels are cached."""
+    pulls = []
+    real_load = engine._load_image
+
+    def counting(job):
+        pulls.append(job.image_sha256)
+        return real_load(job)
+
+    monkeypatch.setattr(engine, "_load_image", counting)
+    engine.run(job("a" * 64, crop_box=[0, 0, 32, 32]))
+    engine.run(job("a" * 64, crop_box=[0, 0, 48, 48]))
+    engine.run(job("a" * 64))
+
+    assert pulls == ["a" * 64]  # one pull for three clicks on the same plate
+    assert engine.metrics.image_cache_hits == 2
+    assert engine.metrics.image_cache_misses == 1
+
+
+def test_an_uncached_digest_is_still_pulled(engine):
+    engine.run(job("a" * 64))
+    engine.run(job("b" * 64))
+    assert engine.metrics.image_cache_misses == 2
+    assert len(engine.images) == 2

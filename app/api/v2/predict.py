@@ -36,24 +36,34 @@ def _parse_job(data: str) -> dict[str, Any]:
     return payload
 
 
-def _resolve_image(payload: dict, upload: UploadFile | None, services: Services) -> bytes:
-    """Uploaded bytes win, then the stored task image, then the upload cache.
+def _resolve_image_fast(
+    payload: dict, upload: UploadFile | None, services: Services, *, need_bytes: bool
+) -> tuple[bytes | None, str]:
+    """Which image a predict applies to, and its digest (without a redundant read).
 
-    The cache branch is the desktop's bandwidth contract: it uploads a local task image
-    once via ``PUT /projects/{p}/images/{rel_path}`` (content addressed) and every later
-    predict references it by ``image_sha256`` instead of sending the bytes again. An
-    unknown digest is deliberately a 404 - that is how a client learns to upload again.
+    For a task image referenced by ``rel_path`` the digest is derived from the bytes, so
+    the whole stored file used to be read (and, over OpenList, fetched) on every request
+    even when the worker already had it decoded. A cheap ``file_info`` etag now memoises
+    that read: the digest is stable for a given (size, mtime), and a replaced file
+    invalidates it.
     """
     if upload is not None:
-        return upload.file.read()
+        data = upload.file.read()
+        return data, sha256_bytes(data)
     rel_path = str(payload.get("rel_path") or "").strip()
     if rel_path:
-        project = str(payload["project"])
-        path = services.storage.image_path(project, rel_path)
-        return services.storage.get_bytes(path)
+        path = services.storage.image_path(str(payload["project"]), rel_path)
+        info = services.storage.file_info(path)
+        digest = services.digests.get(path, info.etag)
+        if digest is not None and not need_bytes:
+            return None, digest  # cached: no bytes needed, the worker has/refetches them
+        data = services.storage.get_bytes(path)
+        digest = sha256_bytes(data)
+        services.digests.put(path, info.etag, digest)
+        return data, digest
     digest = str(payload.get("image_sha256") or "").strip()
     if digest:
-        return services.images.get(digest)
+        return (services.images.get(digest) if need_bytes else None), digest
     raise ValidationFailed("no image: send a file, rel_path or image_sha256")
 
 
@@ -71,13 +81,19 @@ async def predict(
     if task.project != project:
         raise ValidationFailed(f"task {payload['anno_id']} does not belong to project {project}")
 
-    content = _resolve_image({**payload, "project": project}, image, services)
-    digest = sha256_bytes(content)
     inline = services.settings.inference_inline_images
+    content, digest = _resolve_image_fast({**payload, "project": project}, image, services, need_bytes=inline)
     image_url = None
     if not inline:
-        # the worker pulls it back from us on an embedding miss
-        services.images.put(content)
+        # the worker pulls it back from us on an embedding miss; ``put`` is idempotent,
+        # and a memoised request may arrive without the bytes at all - restore them if
+        # the store lost them, otherwise the worker's pull would 404
+        if content is not None:
+            services.images.put(content)
+        elif not services.images.path_for(digest).is_file():
+            rel_path = str(payload.get("rel_path") or "").strip()
+            if rel_path:  # the bytes vanished from the store: restore them once
+                services.images.put(services.storage.get_bytes(services.storage.image_path(project, rel_path)))
         image_url = f"/api/v2/internal/images/{digest}"
     job = {
         "job_id": f"{project}:{payload['anno_id']}:{digest[:12]}",
