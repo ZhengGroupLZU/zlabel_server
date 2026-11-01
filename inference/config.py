@@ -27,7 +27,16 @@ class InferenceSettings(BaseSettings):
     # contour post-processing (kept identical to the desktop client's values)
     contour_min_points: int = 10
     contour_max_points: int = 100
-    contour_max_iterations: int = 10
+    contour_max_iterations: int = 12
+    #: contour smoothing strength in *pixels along the curve* (0 disables it). Smoothing is
+    #: applied to the resampled contour, so a 90 px seed and a 700 px root get the same
+    #: amount of smoothing (the old index-window version did not).
+    contour_smooth_sigma: float = 1.5
+    #: Douglas-Peucker tolerance in pixels; 0 = smooth as-is and only cap the vertex count
+    contour_simplify_epsilon: float = 0.0
+    #: outward offset applied after smoothing: ``findContours`` traces pixel centres, so the
+    #: polygon is short of the rasterised area by ~perimeter/2 (half a pixel puts it back)
+    contour_offset: float = 0.5
     # Relative to the *crop* area, and the desktop now sends prompt-sized crops (a
     # 512 px seed window instead of the whole 4000x6000 plate): the old 3e-5 kept
     # 8 px² blobs there, which SAM happily produces as specks. 2e-4 is ~50 px² of a

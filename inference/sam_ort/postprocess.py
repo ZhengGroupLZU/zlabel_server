@@ -111,51 +111,117 @@ def contour_filter(contours, min_area_ratio: float, img_shape: tuple[int, int]) 
     return [c for c in contours if cv2.contourArea(c) >= min_area]
 
 
-def reduce_contour_points(
-    contour: np.ndarray,
-    target_reduction: float = 0.7,
-    min_points: int = 5,
-    max_points: int = 100,
-    max_iterations: int = 10,
-) -> np.ndarray:
-    """Approximate a contour to a target point count via binary search on epsilon."""
-    low, high = 0.1, 10.0
-    best = None
-    target_points = min(max_points, max(min_points, int(len(contour) * (1 - target_reduction))))
-    for _ in range(max_iterations):
-        epsilon = (low + high) / 2
-        simplified = cv2.approxPolyDP(contour, epsilon, closed=True)
-        if len(simplified) == target_points:
-            best = simplified
-            break
-        if len(simplified) < target_points:
-            high = epsilon
-        else:
-            low = epsilon
-        if high - low < 0.1:
-            best = simplified
-            break
-    if best is None:
-        best = cv2.approxPolyDP(contour, 1.0, closed=True)
-    return best.reshape(-1, 2)
+#: default smoothing strength, in *pixels* along the contour (not in contour points:
+#: an index-window smooth blurs a 60-point seed and a 600-point root differently)
+CONTOUR_SMOOTH_SIGMA = 1.5
+#: arc-length resampling step, in pixels
+CONTOUR_STEP = 1.0
+#: outward offset applied after smoothing. ``findContours`` traces *pixel centres*, so a
+#: polygon through them is short of the rasterised area by about perimeter/2; half a pixel
+#: outward puts it back (measured: a disc goes from -2.3% to -0.1% area error).
+CONTOUR_OFFSET = 0.5
 
 
-def smooth_contour(contour: np.ndarray, window: int = 5) -> np.ndarray:
-    """Moving-average smooth of a closed contour to reduce pixel-stair-step jaggies.
+def resample_closed(pts: np.ndarray, step: float = CONTOUR_STEP) -> np.ndarray:
+    """Resample a closed polyline at a uniform arc-length step (float32 (N, 2)).
 
-    ``window`` is the averaging window size (odd). Returns the same layout as the
-    input contour (N,1,2) int32.
+    Smoothing has to happen *along the curve*, not along the vertex list: the vertices of
+    a ``CHAIN_APPROX_SIMPLE`` contour are spaced by pixel distance, so an index window
+    would blur long straight parts more than short wiggly ones.
     """
-    pts = contour.reshape(-1, 2).astype(np.float32)
+    pts = np.asarray(pts, np.float32).reshape(-1, 2)
     n = len(pts)
-    if n < window:
-        return contour
-    half = window // 2
-    out = np.empty_like(pts)
-    for i in range(n):
-        idxs = [(i + j) % n for j in range(-half, half + 1)]
-        out[i] = np.mean(pts[idxs], axis=0)
-    return out.reshape(-1, 1, 2).astype(np.int32)
+    if n < 3:
+        return pts
+    nxt = np.roll(pts, -1, axis=0)
+    seg = np.hypot(*(nxt - pts).T)
+    perimeter = float(seg.sum())
+    if perimeter <= 0:
+        return pts
+    counts = max(8, int(round(perimeter / max(step, 1e-3))))
+    cum = np.concatenate([[0.0], np.cumsum(seg)])
+    closed = np.vstack([pts, pts[:1]])
+    targets = np.linspace(0.0, perimeter, counts, endpoint=False)
+    return np.column_stack([np.interp(targets, cum, closed[:, 0]), np.interp(targets, cum, closed[:, 1])]).astype(
+        np.float32
+    )
+
+
+def smooth_closed(pts: np.ndarray, sigma_px: float, step: float = CONTOUR_STEP) -> np.ndarray:
+    """Circular Gaussian smoothing of the contour coordinates, ``sigma`` in pixels."""
+    pts = np.asarray(pts, np.float32).reshape(-1, 2)
+    if sigma_px <= 0 or len(pts) < 4:
+        return pts
+    sigma = max(0.3, float(sigma_px) / max(step, 1e-3))
+    radius = max(1, int(np.ceil(3.0 * sigma)))
+    idx = np.arange(-radius, radius + 1)
+    kernel = np.exp(-0.5 * (idx / sigma) ** 2)
+    kernel /= kernel.sum()
+    out = np.zeros_like(pts)
+    for k, off in enumerate(idx):
+        out += kernel[k] * np.roll(pts, -int(off), axis=0)
+    return out.astype(np.float32)
+
+
+def offset_polygon(pts: np.ndarray, dist: float = CONTOUR_OFFSET) -> np.ndarray:
+    """Push every vertex along the outward normal (see ``CONTOUR_OFFSET``)."""
+    pts = np.asarray(pts, np.float32).reshape(-1, 2)
+    if not dist or len(pts) < 3:
+        return pts
+    tan = np.roll(pts, -1, axis=0) - np.roll(pts, 1, axis=0)
+    norm = np.column_stack([-tan[:, 1], tan[:, 0]])
+    length = np.hypot(norm[:, 0], norm[:, 1])
+    length[length == 0] = 1.0
+    unit = norm / length[:, None]
+    # Which sign is "outward" depends on the winding order the caller produced, so decide
+    # by measuring instead of assuming: keep the side that grows the enclosed area.
+    outward = (pts + dist * unit).astype(np.float32)
+    inward = (pts - dist * unit).astype(np.float32)
+    return outward if abs(cv2.contourArea(outward)) >= abs(cv2.contourArea(inward)) else inward
+
+
+def smooth_contour(contour: np.ndarray, sigma_px: float = CONTOUR_SMOOTH_SIGMA) -> np.ndarray:
+    """Uniformly resample a closed contour and Gaussian-smooth it: (N, 2) float32.
+
+    Replaces the old moving average over a fixed *number of points*, whose blur depended on
+    how densely the contour happened to be sampled, and its integer output, which snapped
+    the polygon back onto the pixel grid it was being smoothed away from.
+    """
+    pts = np.asarray(contour, np.float32).reshape(-1, 2)
+    return smooth_closed(resample_closed(pts, CONTOUR_STEP), sigma_px, CONTOUR_STEP)
+
+
+def reduce_contour_points(
+    pts: np.ndarray,
+    max_points: int = 100,
+    min_points: int = 5,
+    epsilon_px: float = 0.0,
+    max_iterations: int = 12,
+) -> np.ndarray:
+    """Douglas-Peucker with a tolerance in *pixels*; only used to cap the vertex count.
+
+    ``epsilon_px`` > 0 simplifies every contour by that tolerance. With 0 the shape is kept
+    as smoothed and the tolerance is raised only as far as needed to get under
+    ``max_points`` - the old version always aimed for ~30% of the points with a tolerance
+    up to 10 px, which replaced smooth arcs with long straight chords.
+    """
+    pts = np.asarray(pts, np.float32).reshape(-1, 2)
+    if len(pts) < 3:
+        return pts
+    poly = pts.reshape(-1, 1, 2)
+    if epsilon_px > 0:
+        poly = cv2.approxPolyDP(poly, float(epsilon_px), True)
+    if len(poly) > max(max_points, min_points):
+        low, high = 1e-3, 512.0
+        for _ in range(max(1, max_iterations)):
+            mid = (low + high) / 2.0
+            if len(cv2.approxPolyDP(poly, mid, True)) > max_points:
+                low = mid
+            else:
+                high = mid
+        poly = cv2.approxPolyDP(poly, high, True)
+    out = poly.reshape(-1, 2).astype(np.float32)
+    return out if len(out) >= 3 else pts
 
 
 def nms_filter(boxes: list[tuple[float, float, float, float]], iou_threshold: float = 0.5) -> list[int]:

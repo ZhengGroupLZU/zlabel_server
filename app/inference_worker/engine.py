@@ -277,6 +277,9 @@ class InferenceEngine:
             contour_min_points=self.settings.contour_min_points,
             contour_max_points=self.settings.contour_max_points,
             contour_max_iterations=self.settings.contour_max_iterations,
+            contour_smooth_sigma=self.settings.contour_smooth_sigma,
+            contour_simplify_epsilon=self.settings.contour_simplify_epsilon,
+            contour_offset=self.settings.contour_offset,
         )
         data = self._dispatch(worker, job, mode, offset)
         if offset != (0.0, 0.0):

@@ -189,6 +189,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
 - **`POST .../predict` 必须是同步 handler（`def`，不是 `async def`）**：拉取模式下 worker 会在 API 等待它的时候回头来取图，同步 handler 由 FastAPI 丢到线程池跑，事件循环才是空的；写成 `async def` 会在等 worker 时把循环堵死，worker 的 `GET /internal/images/{digest}` 排在后面直到超时，表现为 `503 cannot pull the image from the API`（回归测试：`tests/app/test_predict_pull_mode.py`）。
 - `mode` 校验前置（不再 500）：点提示只接受 1(SAM)/2(CV)，框提示接受 0/1/2/3，文本只接受 1；`mode=0` 是客户端"同时勾选 SAM+OpenCV"的历史值，按旧语义交给框路径。
 - 模型参数沿用 v1：`ZLSERVER_MODEL_NAME/DIR/BACKEND`、SAM3 conf/iou、轮廓后处理参数（与桌面端逐像素对齐的预处理逻辑保持不变）。
+- **轮廓后处理（与客户端逐行为一致）**：掩膜先 `medianBlur(3)` + 阈值（不再用 dilate→blur→erode —— 那条链末端是未阈值的模糊掩膜，非零光晕被当成前景，实测把种子面积放大了 4.7%、6 px 细条放大 17%），再 `findContours` → 面积过滤 → **按弧长重采样后用高斯平滑**（`ZLSERVER_CONTOUR_SMOOTH_SIGMA`，单位是*像素*，因此 90 px 的种子和 700 px 的根得到同样的平滑量；旧实现是固定*点数*窗口，平滑强度随采样密度变化）→ **沿法线外扩 `contour_offset`（默认 0.5 px）** 补回"像素中心轮廓比栅格面积小约周长/2"的偏差 → 最后才用 `approxPolyDP` 以**像素**为容差压点数（`contour_simplify_epsilon`，0 = 只压到 `contour_max_points`，不改变形状）。输出是亚像素浮点坐标。实测面积误差：种子 +4.7% → −0.0%，圆盘 +3.3% → −0.1%，细条 +17% → −1.4%。
 - 降级：worker 不可达 → `503 inference_unavailable`，客户端提示"推理不可用，可继续手动标注"（不再 500）。
 
 ## 9. 序列分组：由服务端解析

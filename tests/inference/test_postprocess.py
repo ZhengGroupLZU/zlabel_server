@@ -9,6 +9,7 @@ from inference.sam_ort.postprocess import (
     contour_filter,
     nms,
     nms_filter,
+    offset_polygon,
     pcs_filter_nms,
     pcs_scores,
     reduce_contour_points,
@@ -148,20 +149,46 @@ class TestContourHelpers:
         simplified = reduce_contour_points(contour, min_points=5, max_points=100)
         assert 4 <= len(simplified) <= 100
 
-    def test_smooth_contour(self):
-        # a jagged square outline; smoothing keeps the same layout and count
+    def test_smooth_contour_resamples_and_smooths_in_pixels(self):
+        # a jagged square outline: 2 px steps, sharp corners
         contour = np.array(
-            [[0, 0], [0, 4], [0, 8], [4, 8], [8, 8], [8, 4], [8, 0], [4, 0]], np.int32
-        ).reshape(-1, 1, 2)
-        smoothed = smooth_contour(contour, window=3)
-        assert smoothed.shape == contour.shape
-        assert smoothed.dtype == np.int32
-        # results stay inside the original bounding box
-        assert smoothed.min() >= 0 and smoothed.max() <= 8
-        # a point on a straight edge is averaged over its neighbors (no NaN drift)
+            [[0, 0], [0, 4], [0, 8], [4, 8], [8, 8], [8, 4], [8, 0], [4, 0]], np.float32
+        ).reshape(-1, 2)
+        smoothed = smooth_contour(contour, sigma_px=1.5)
+        assert smoothed.dtype == np.float32  # subpixel: no snapping back to the grid
+        assert smoothed.ndim == 2 and smoothed.shape[1] == 2
+        # resampled at ~1 px of arc length, so the outline keeps its perimeter
+        perimeter = float(np.hypot(*(np.roll(smoothed, -1, axis=0) - smoothed).T).sum())
+        assert 16 < perimeter < 40
+        # smoothing pulls a sharp corner in, but stays inside the shape's box (+/- 1 px)
+        assert smoothed.min() >= -1.0 and smoothed.max() <= 9.0
         assert np.isfinite(smoothed).all()
 
-    def test_smooth_contour_small_contour_unchanged(self):
-        contour = np.array([[0, 0], [1, 1], [2, 0]], np.int32).reshape(-1, 1, 2)
-        smoothed = smooth_contour(contour, window=5)  # window > n -> identity
-        np.testing.assert_array_equal(smoothed, contour)
+    def test_smooth_contour_keeps_a_smooth_curve_in_place(self):
+        angles = np.linspace(0, 2 * np.pi, 200, endpoint=False)
+        circle = np.column_stack([100 + 40 * np.cos(angles), 100 + 40 * np.sin(angles)]).astype(np.float32)
+        smoothed = smooth_contour(circle, sigma_px=1.5)
+        radius = np.hypot(smoothed[:, 0] - 100, smoothed[:, 1] - 100)
+        assert abs(float(radius.mean()) - 40) < 0.6  # no shrinkage of an already smooth edge
+
+    def test_smooth_contour_survives_a_tiny_contour(self):
+        """A degenerate 3-point contour is resampled but must not become a blob."""
+        import cv2
+
+        contour = np.array([[0, 0], [10, 0], [10, 10]], np.float32)
+        smoothed = smooth_contour(contour, sigma_px=1.5)
+        assert smoothed.shape[1] == 2 and len(smoothed) >= 3
+        assert abs(cv2.contourArea(smoothed) - cv2.contourArea(contour)) < 0.35 * cv2.contourArea(contour)
+
+    def test_offset_polygon_restores_the_pixel_centre_area(self):
+        import cv2
+
+        mask = np.zeros((200, 200), np.uint8)
+        cv2.circle(mask, (100, 100), 45, 255, -1)
+        truth = float(np.count_nonzero(mask))
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        pts = smooth_contour(max(contours, key=cv2.contourArea), sigma_px=1.5)
+        bare = abs(cv2.contourArea(pts))
+        expanded = abs(cv2.contourArea(offset_polygon(pts, 0.5)))
+        assert bare < truth  # pixel centres are ~perimeter/2 short of the raster area
+        assert abs(expanded / truth - 1) < 0.01  # half a pixel outward puts it back
