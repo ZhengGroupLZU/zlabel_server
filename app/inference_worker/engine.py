@@ -313,6 +313,17 @@ class InferenceEngine:
             points = self._points(prompts.points)
             if offset != (0.0, 0.0):
                 points = [Point(x=p.x + dx, y=p.y + dy) for p in points]
+            # A point outside the crop reaches the decoder at a coordinate the crop does
+            # not contain, i.e. it is meaningless. The desktop widens its prompt window to
+            # the union of all points, so this only fires for an out-of-date client (or a
+            # hand-made request) - log it instead of guessing silently.
+            height, width = worker.img.shape[:2]
+            outside = [(round(p.x), round(p.y)) for p in points if not (0 <= p.x < width and 0 <= p.y < height)]
+            if outside:
+                logger.warning(
+                    f"prompt points outside the crop window ({width}x{height}): {outside[:4]} - "
+                    "the masks for these prompts are unreliable"
+                )
             if mode not in (AutoMode.SAM, AutoMode.CV):
                 raise ValidationFailed("point prompts support mode=1 (SAM) or mode=2 (CV)")
             return worker.run_point(

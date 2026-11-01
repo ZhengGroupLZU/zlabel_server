@@ -403,3 +403,23 @@ def test_an_uncached_digest_is_still_pulled(engine):
     engine.run(job("b" * 64))
     assert engine.metrics.image_cache_misses == 2
     assert len(engine.images) == 2
+
+
+def test_prompt_points_outside_the_crop_are_reported(engine, monkeypatch):
+    """A point the crop does not contain makes the mask meaningless; say so in the log.
+
+    (``caplog`` cannot see these loggers: ``get_logger`` attaches its own handler and sets
+    ``propagate = False``, so the module logger is spied on instead.)
+    """
+    import app.inference_worker.engine as enginemod
+
+    warnings: list[str] = []
+    monkeypatch.setattr(enginemod.logger, "warning", lambda msg, *a, **k: warnings.append(str(msg)))
+    outside = job("a" * 64, crop_box=[0, 0, 32, 32], prompts={"points": [{"x": 500, "y": 500}], "labels": [1]})
+    engine.run(outside)
+    assert any("outside the crop window" in w for w in warnings)
+
+    warnings.clear()
+    inside = job("a" * 64, crop_box=[0, 0, 32, 32], prompts={"points": [{"x": 10, "y": 10}], "labels": [1]})
+    engine.run(inside)
+    assert not warnings
