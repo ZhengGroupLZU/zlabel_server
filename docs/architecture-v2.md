@@ -186,6 +186,7 @@ audit_log        id, ts, user_id, action, target_type, target_id, detail_json
   2. worker 侧 `DecodedImageCache`（`sha256 -> BGR ndarray`）：命中时**连拉取都不做**，只切 crop；
   3. `EmbeddingCache`（`sha256#crop -> 编码快照`）：同一裁剪窗口的连续点击不重跑 encoder。
   命中链完整时一次 predict 只剩 encoder+decoder 的时间。
+- **`POST .../predict` 必须是同步 handler（`def`，不是 `async def`）**：拉取模式下 worker 会在 API 等待它的时候回头来取图，同步 handler 由 FastAPI 丢到线程池跑，事件循环才是空的；写成 `async def` 会在等 worker 时把循环堵死，worker 的 `GET /internal/images/{digest}` 排在后面直到超时，表现为 `503 cannot pull the image from the API`（回归测试：`tests/app/test_predict_pull_mode.py`）。
 - `mode` 校验前置（不再 500）：点提示只接受 1(SAM)/2(CV)，框提示接受 0/1/2/3，文本只接受 1；`mode=0` 是客户端"同时勾选 SAM+OpenCV"的历史值，按旧语义交给框路径。
 - 模型参数沿用 v1：`ZLSERVER_MODEL_NAME/DIR/BACKEND`、SAM3 conf/iou、轮廓后处理参数（与桌面端逐像素对齐的预处理逻辑保持不变）。
 - 降级：worker 不可达 → `503 inference_unavailable`，客户端提示"推理不可用，可继续手动标注"（不再 500）。

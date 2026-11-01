@@ -68,13 +68,17 @@ def _resolve_image_fast(
 
 
 @router.post("/projects/{project}/predict")
-async def predict(
+def predict(
     project: str,
     data: str = Form(...),
     image: UploadFile | None = File(None),
     auth: AuthContext = Depends(get_auth),
     services: Services = Depends(get_services),
 ) -> dict[str, Any]:
+    # Deliberately a *sync* handler: FastAPI runs it in a threadpool, which leaves the
+    # event loop free. With ``INLINE_IMAGES=false`` the worker pulls the task image back
+    # from this very process while we wait for it, so an ``async def`` handler (which
+    # blocks the loop on the synchronous worker call) deadlocks and the pull times out.
     services.projects.get_project(project, auth=auth)
     payload = _parse_job(data)
     task = services.tasks.get_task(payload["anno_id"])
