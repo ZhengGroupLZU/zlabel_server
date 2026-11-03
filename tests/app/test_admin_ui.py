@@ -869,3 +869,101 @@ def test_dashboard_renders_status_cards_and_static_js(admin_client):
 
 
 # endregion
+
+
+# region label instance-type mapping in the admin UI
+def test_labels_tab_shows_and_saves_the_instance_type_mapping(admin_client):
+    """The mapping cell is tri-state: spec table / any type / the selected types."""
+    login(admin_client)
+    services = admin_client.app.state.services
+    services.projects.create_project("projA", actor_id=1)
+    services.projects.create_label("projA", "Root", actor_id=1)  # spec-seeded
+    services.projects.create_label("projA", "Needle", actor_id=1)  # unconfigured
+    ids = {label.name: label.id for label in services.projects.list_labels("projA")}
+
+    page = admin_client.get("/admin/projects", params={"project": "projA", "tab": "labels"})
+    html = page.text
+    # one row per label, each with a default-type input + the mode/multi-select cell
+    assert f'name="default-type-{ids["Root"]}"' in html
+    assert 'list="instance-statuses"' in html and '<datalist id="instance-statuses">' in html
+    assert f'name="allowed-mode-{ids["Root"]}"' in html and f'name="allowed-{ids["Root"]}"' in html
+    assert 'multiple size="3"' in html
+    # the spec-seeded label renders as "list" with its types ticked, the other as "spec"
+    root_row = re.search(rf'<tr data-label-id="{ids["Root"]}">.*?</tr>', html, re.S).group(0)
+    needle_row = re.search(rf'<tr data-label-id="{ids["Needle"]}">.*?</tr>', html, re.S).group(0)
+    assert '<option value="list" selected>' in root_row
+    assert '<option value="normal_seedling" selected>' in root_row
+    assert '<option value="spec" selected>' in needle_row
+
+    token = csrf_token(admin_client, "/admin/projects?project=projA&tab=labels")
+    order = ",".join(str(label.id) for label in services.projects.list_labels("projA"))
+    saved = admin_client.post(
+        "/admin/projects/label/save-all",
+        data={
+            "project": "projA",
+            "order": order,
+            f"name-{ids['Root']}": "Root",
+            f"default-type-{ids['Root']}": "abnormal_seedling",
+            f"allowed-mode-{ids['Root']}": "list",
+            f"allowed-{ids['Root']}": ["abnormal_seedling", "moldy_seed"],
+            f"name-{ids['Needle']}": "Needle",
+            f"default-type-{ids['Needle']}": "",
+            f"allowed-mode-{ids['Needle']}": "any",
+            "csrftoken": token,
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    by_name = {label.name: label for label in services.projects.list_labels("projA", include_archived=True)}
+    assert by_name["Root"].default_instance_type == "abnormal_seedling"
+    assert by_name["Root"].allowed_types == ["abnormal_seedling", "moldy_seed"]
+    assert by_name["Needle"].allowed_types == []  # explicit "any type"
+    assert _audit(admin_client, "update_label")
+
+    # "spec table" writes the NULL back (the desktop then uses the built-in table)
+    reset = admin_client.post(
+        "/admin/projects/label/save-all",
+        data={
+            "project": "projA",
+            "order": order,
+            f"name-{ids['Root']}": "Root",
+            f"default-type-{ids['Root']}": "",
+            f"allowed-mode-{ids['Root']}": "spec",
+            f"name-{ids['Needle']}": "Needle",
+            f"allowed-mode-{ids['Needle']}": "any",
+            "csrftoken": token,
+        },
+        follow_redirects=False,
+    )
+    assert reset.status_code == 303
+    root = next(lbl for lbl in services.projects.list_labels("projA") if lbl.name == "Root")
+    assert root.allowed_types is None and root.default_instance_type == ""
+
+
+def test_mapping_only_names_types_the_project_offers(admin_client):
+    """A stale/typo'd type is dropped instead of being stored or rejecting the save."""
+    login(admin_client)
+    services = admin_client.app.state.services
+    services.projects.create_project("projA", actor_id=1)
+    label = services.projects.create_label("projA", "Seed", actor_id=1)
+    token = csrf_token(admin_client, "/admin/projects?project=projA&tab=labels")
+
+    saved = admin_client.post(
+        "/admin/projects/label/save-all",
+        data={
+            "project": "projA",
+            "order": str(label.id),
+            f"name-{label.id}": "Seed",
+            f"default-type-{label.id}": "normal_seed",
+            f"allowed-mode-{label.id}": "list",
+            f"allowed-{label.id}": ["normal_seed", "nonsense"],
+            "csrftoken": token,
+        },
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303
+    stored = next(lbl for lbl in services.projects.list_labels("projA") if lbl.name == "Seed")
+    assert stored.allowed_types == ["normal_seed"]
+
+
+# endregion

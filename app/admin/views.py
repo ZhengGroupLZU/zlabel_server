@@ -111,6 +111,43 @@ def _is_image(name: str) -> bool:
     return name.lower().endswith(IMAGE_SUFFIXES)
 
 
+#: how a label's allowed instance types may be expressed (the mapping's tri-state)
+ALLOWED_TYPE_MODES: tuple[tuple[str, str], ...] = (
+    ("spec", "spec table"),
+    ("any", "any type"),
+    ("list", "selected"),
+)
+
+
+def _allowed_types_cell(label, vocabulary: list[str]) -> str:
+    """Mode + multi-select cell for one label's allowed instance types.
+
+    ``spec table`` = unconfigured (``NULL``: the desktop falls back to
+    ``docs/export_spec.md`` §1.1), ``any type`` = ``[]``, ``selected`` = the ticked
+    types. The mode select decides what the multi-select means, so an empty
+    selection is never ambiguous.
+    """
+    allowed = label.allowed_types
+    mode = "spec" if allowed is None else ("any" if not allowed else "list")
+    modes = "".join(
+        f'<option value="{value}"{" selected" if value == mode else ""}>{_e(text)}</option>'
+        for value, text in ALLOWED_TYPE_MODES
+    )
+    options = "".join(
+        f'<option value="{_e(status)}"{" selected" if allowed and status in allowed else ""}>'
+        f"{_e(status)}</option>"
+        for status in vocabulary
+    )
+    return (
+        '<div class="d-flex flex-column gap-1">'
+        f'<select name="allowed-mode-{label.id}" class="form-select form-select-sm" style="width:9rem">'
+        f"{modes}</select>"
+        f'<select name="allowed-{label.id}" class="form-select form-select-sm" multiple size="3" '
+        f'style="min-width:12rem">{options}</select>'
+        "</div>"
+    )
+
+
 # region label colour picker (dropdown of swatch + hex, or a typed hex code)
 LABEL_PICKER_STYLE = """<style>
 .zl-color{display:flex;flex-wrap:nowrap;gap:.35rem;align-items:center}
@@ -751,6 +788,25 @@ class ProjectsView(_PageView):
             return self.back(request, error=getattr(e, "message", str(e)), project=project, tab="members")
         return self.back(request, ok="member removed", project=project, tab="members")
 
+    @staticmethod
+    def _allowed_types_fields(form, label_id: int) -> dict[str, Any]:
+        """``{set_allowed_types, allowed_instance_types}`` of one label's mapping cell.
+
+        ``spec`` -> ``None`` (unconfigured, the client uses the spec table),
+        ``any`` -> ``[]`` (every type allowed), ``list`` -> the selected types.
+        An absent mode means the form did not carry the cell (an older page): the
+        mapping is then left untouched.
+        """
+        mode = str(form.get(f"allowed-mode-{label_id}") or "").strip()
+        if mode == "spec":
+            return {"set_allowed_types": True, "allowed_instance_types": None}
+        if mode == "any":
+            return {"set_allowed_types": True, "allowed_instance_types": []}
+        if mode == "list":
+            picked = [str(value) for value in form.getlist(f"allowed-{label_id}") if str(value).strip()]
+            return {"set_allowed_types": True, "allowed_instance_types": picked}
+        return {}
+
     @route("/label/save", methods=["POST"])
     async def label_save(self, request: Request) -> Response:
         form = await request.form()
@@ -765,6 +821,7 @@ class ProjectsView(_PageView):
             sort = None
         try:
             if label_id:
+                mapping = self._allowed_types_fields(form, int(label_id))
                 self.services.projects.update_label(
                     project,
                     int(label_id),
@@ -773,6 +830,9 @@ class ProjectsView(_PageView):
                     sort=sort,
                     archived="archived" in form,
                     actor_id=self.actor_id(request),
+                    default_instance_type=form.get(f"default-type-{label_id}"),
+                    allowed_instance_types=mapping.get("allowed_instance_types"),
+                    set_allowed_types=mapping.get("set_allowed_types", False),
                 )
                 ok = f"label {name!r} updated"
             else:
@@ -803,6 +863,9 @@ class ProjectsView(_PageView):
                 "name": form.get(f"name-{label.id}"),
                 "color": form.get(f"color-{label.id}"),
                 "archived": f"archived-{label.id}" in form,
+                "default_instance_type": form.get(f"default-type-{label.id}"),
+                "set_allowed_types": True,
+                **self._allowed_types_fields(form, label.id),
             }
             for label in labels
         }
@@ -1354,6 +1417,12 @@ class ProjectsView(_PageView):
         """
         csrf = self.csrf(request)
         labels = self.services.projects.list_labels(project_name, include_archived=True)
+        vocabulary = self.services.instances.status_presets(project_name)
+        datalist = (
+            '<datalist id="instance-statuses">'
+            + "".join(f'<option value="{_e(status)}"></option>' for status in vocabulary)
+            + "</datalist>"
+        )
         rows = []
         delete_forms = []
         for index, label in enumerate(labels):
@@ -1369,6 +1438,10 @@ class ProjectsView(_PageView):
                 "</td><td>"
                 + _color_picker(f"label-color-{label.id}", color, name=f"color-{label.id}")
                 + "</td><td>"
+                f'<input name="default-type-{label.id}" class="form-control form-control-sm" '
+                f'style="max-width:11rem" list="instance-statuses" '
+                f'value="{_e(label.default_instance_type)}" placeholder="(none)">'
+                "</td><td>" + _allowed_types_cell(label, vocabulary) + "</td><td>"
                 "<label class='form-check form-check-inline m-0'>"
                 f"<input type='checkbox' name='archived-{label.id}' value='1' class='form-check-input'"
                 f"{' checked' if label.archived else ''}><span class='form-check-label'>archived</span></label>"
@@ -1384,7 +1457,15 @@ class ProjectsView(_PageView):
                 f"<input type='hidden' name='project' value='{_e(project_name)}'>"
                 f"<input type='hidden' name='label_id' value='{label.id}'></form>"
             )
-        table = _table(["", "id", "label", "colour", "", ""], rows, "no labels yet", table_id="label-table")
+        table = (
+            _table(
+                ["", "id", "label", "colour", "default type", "allowed instance types", "archived", ""],
+                rows,
+                "no labels yet",
+                table_id="label-table",
+            )
+            + datalist
+        )
         bulk = (
             f'<form id="label-bulk-form" method="post" action="{self.url(request, "/label/save-all")}">'
             f"{csrf}<input type='hidden' name='project' value='{_e(project_name)}'>"
@@ -1480,6 +1561,14 @@ class ProjectsView(_PageView):
             "<strong>Save all labels</strong> to persist fields and order together. "
             "Colour: open the palette list (colour + hex per entry) or type a code "
             "(<code>#rrggbb</code>, <code>#rgb</code> or a bare <code>rrggbb</code>).</p>"
+            '<p class="text-muted">The last two columns are the label&rsquo;s '
+            "<strong>instance type</strong> mapping (<code>docs/export_spec.md</code> §1.1): "
+            "<em>default type</em> is what a new instance carrying this label starts with, "
+            "<em>allowed instance types</em> restricts where the label may appear "
+            "(<strong>spec table</strong> = no override, the built-in table decides;</p>"
+            '<p class="text-muted"><strong>any type</strong> = no restriction; '
+            "<strong>selected</strong> = only the ticked types). The desktop marks contradicting "
+            "instances and reports them before an export; the server never rejects a document.</p>"
         )
         return (
             f'<div class="col-12">{_card("Labels", LABEL_PICKER_STYLE + bulk + save_all + note + "".join(delete_forms) + LABEL_PICKER_SCRIPT + script)}</div>'
