@@ -137,3 +137,84 @@ def test_labels_introduced_by_an_annotation_get_palette_colours(client, auth_hea
     assert set(colors) == {"Root", "Shoot"}
     assert all(color in LABEL_PALETTE for color in colors.values())
     assert len(set(colors.values())) == 2  # two new labels, two different colours
+
+
+# region instance-type mapping (docs/export_spec.md §1.1)
+def test_spec_named_labels_are_seeded_with_the_spec_table(client, auth_headers):
+    headers = auth_headers(client)
+    client.post("/api/v2/projects", json={"name": "projA"}, headers=headers)
+    resp = client.post("/api/v2/projects/projA/labels", json={"name": "Root"}, headers=headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["default_instance_type"] == "normal_seedling"
+    assert body["allowed_instance_types"] == ["normal_seedling", "abnormal_seedling", "moldy_seed"]
+
+
+def test_project_specific_labels_stay_unconfigured(client, auth_headers):
+    headers = auth_headers(client)
+    client.post("/api/v2/projects", json={"name": "projA"}, headers=headers)
+    body = client.post("/api/v2/projects/projA/labels", json={"name": "Needle"}, headers=headers).json()
+    # None = unconfigured (the client keeps its spec-table fallback), not []
+    assert body["default_instance_type"] == ""
+    assert body["allowed_instance_types"] is None
+
+
+def test_explicit_mapping_wins_and_unknown_types_are_dropped(client, auth_headers):
+    headers = auth_headers(client)
+    client.post("/api/v2/projects", json={"name": "projA"}, headers=headers)
+    resp = client.post(
+        "/api/v2/projects/projA/labels",
+        json={
+            "name": "Seed",
+            "default_instance_type": "dead_seed",
+            "allowed_instance_types": ["dead_seed", "nonsense"],
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["default_instance_type"] == "dead_seed"
+    assert resp.json()["allowed_instance_types"] == ["dead_seed"]
+
+
+def test_patch_distinguishes_omitted_null_and_empty(client, auth_headers):
+    headers = auth_headers(client)
+    client.post("/api/v2/projects", json={"name": "projA"}, headers=headers)
+    label = client.post("/api/v2/projects/projA/labels", json={"name": "Seed"}, headers=headers).json()
+    url = f"/api/v2/projects/projA/labels/{label['id']}"
+
+    # an omitted key keeps the mapping
+    kept = client.patch(url, json={"name": "Seed"}, headers=headers).json()
+    assert kept["allowed_instance_types"] == ["normal_seed", "moldy_seed", "dead_seed"]
+
+    # an explicit empty list = "any type is allowed"
+    empty = client.patch(url, json={"allowed_instance_types": []}, headers=headers).json()
+    assert empty["allowed_instance_types"] == []
+
+    # an explicit null = back to unconfigured (client spec fallback)
+    reset = client.patch(url, json={"allowed_instance_types": None}, headers=headers).json()
+    assert reset["allowed_instance_types"] is None
+
+    # the default type lives in its own field ("": cleared)
+    cleared = client.patch(url, json={"default_instance_type": ""}, headers=headers).json()
+    assert cleared["default_instance_type"] == ""
+
+
+def test_labels_introduced_by_saves_get_the_spec_mapping(client, auth_headers, harness):
+    from tests.app.test_projects import seed
+
+    seed(harness, "projA", files=("images/a/D1.png",))
+    headers = auth_headers(client)
+    client.post("/api/v2/projects/scan", headers=headers)
+    anno_id = client.get("/api/v2/projects/projA/tasks", headers=headers).json()["items"][0]["anno_id"]
+    client.put(
+        f"/api/v2/projects/projA/annotations/{anno_id}",
+        json={"results": {"r1": {"labels": [{"name": "Dish"}, {"name": "Needle"}]}}},
+        headers=headers,
+    )
+    labels = {lbl["name"]: lbl for lbl in client.get("/api/v2/projects/projA/labels", headers=headers).json()}
+    assert labels["Dish"]["default_instance_type"] == "dish"
+    assert labels["Dish"]["allowed_instance_types"] == ["dish"]
+    assert labels["Needle"]["allowed_instance_types"] is None
+
+
+# endregion

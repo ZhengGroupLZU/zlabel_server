@@ -44,7 +44,9 @@ from app.db.models import (
 from app.services import audit
 from app.services.auth_service import AuthContext
 from app.services.grouping import parse_group
+from app.services.instance_service import status_vocabulary
 from app.services.label_palette import normalize_color, pick_color
+from app.services.label_types import filter_known_types, spec_for
 
 logger = get_logger("zlabel.app.projects")
 
@@ -595,7 +597,16 @@ class ProjectService:
         color: str = "",
         sort: int | None = None,
         actor_id: int | None = None,
+        default_instance_type: str | None = None,
+        allowed_instance_types: list[str] | None = None,
     ) -> Label:
+        """Create a label.
+
+        ``default_instance_type``/``allowed_instance_types`` are the label's part of
+        the ``instance_type`` x ``part`` mapping (``docs/export_spec.md`` §1.1). Both
+        ``None`` mean "unconfigured": a spec-named label is seeded with the spec
+        table, any other label stays unconstrained (``allowed`` = ``NULL``).
+        """
         clean = name.strip()
         if not clean:
             raise Conflict("a label needs a name")
@@ -616,12 +627,21 @@ class ProjectService:
                 # must not share sort=0 with the first one
                 highest = session.scalar(select(func.max(Label.sort)).where(Label.project_id == project_id))
                 sort = int(highest) + 1 if highest is not None else 0
+            spec = spec_for(clean)
+            default = str(default_instance_type or "").strip()
+            if not default and spec is not None:
+                default = spec.default
+            allowed = allowed_instance_types
+            if allowed is None and spec is not None:
+                allowed = list(spec.allowed)
             label = Label(
                 project_id=project_id,
                 name=clean,
                 color=wanted or pick_color(self._used_label_colors(session, project_id)),
                 sort=sort,
+                default_instance_type=default,
             )
+            label.set_allowed_types(self._known_types(session, project_id, allowed))
             session.add(label)
             session.flush()
             audit.record(
@@ -630,7 +650,12 @@ class ProjectService:
                 user_id=actor_id,
                 target_type="label",
                 target_id=label.id,
-                detail={"project": project, "name": clean},
+                detail={
+                    "project": project,
+                    "name": clean,
+                    "default_instance_type": label.default_instance_type,
+                    "allowed_instance_types": label.allowed_types,
+                },
             )
             return label
 
@@ -644,7 +669,16 @@ class ProjectService:
         sort: int | None = None,
         archived: bool | None = None,
         actor_id: int | None = None,
+        default_instance_type: str | None = None,
+        allowed_instance_types: list[str] | None = None,
+        set_allowed_types: bool = False,
     ) -> Label:
+        """Patch a label; ``set_allowed_types`` distinguishes "not sent" from ``None``.
+
+        ``allowed_instance_types=None`` **with** ``set_allowed_types`` resets the
+        label to unconfigured (the client then falls back to the spec table), while
+        ``[]`` means "any type is allowed".
+        """
         with self.db.session_scope() as session:
             project_id = self._project_id(session, project)
             label = session.scalar(select(Label).where(Label.id == label_id, Label.project_id == project_id))
@@ -659,15 +693,38 @@ class ProjectService:
                 label.sort = sort
             if archived is not None:
                 label.archived = archived
+            if default_instance_type is not None:
+                label.default_instance_type = str(default_instance_type).strip()
+            if set_allowed_types:
+                label.set_allowed_types(self._known_types(session, project_id, allowed_instance_types))
             audit.record(
                 session,
                 action="update_label",
                 user_id=actor_id,
                 target_type="label",
                 target_id=label.id,
-                detail={"project": project, "name": label.name, "archived": label.archived},
+                detail={
+                    "project": project,
+                    "name": label.name,
+                    "archived": label.archived,
+                    "default_instance_type": label.default_instance_type,
+                    "allowed_instance_types": label.allowed_types,
+                },
             )
             return label
+
+    def _known_types(
+        self, session: OrmSession, project_id: int, allowed: list[str] | None
+    ) -> list[str] | None:
+        """Drop mapped types the project does not offer (see ``status_vocabulary``)."""
+        if allowed is None:
+            return None
+        vocabulary = status_vocabulary(session, project_id)
+        kept = filter_known_types(allowed, vocabulary)
+        dropped = [t for t in dict.fromkeys(str(a) for a in allowed) if t not in vocabulary]
+        if dropped:
+            logger.warning(f"label mapping drops unknown instance types: {dropped}")
+        return kept
 
     def delete_label(self, project: str, label_id: int, *, actor_id: int | None = None) -> None:
         with self.db.session_scope() as session:
@@ -690,7 +747,9 @@ class ProjectService:
 
         New labels get an unused palette colour (or ``default_label_color`` when the
         deployment forces one), so a task that introduces labels produces a
-        readable, distinct legend instead of a wall of black.
+        readable, distinct legend instead of a wall of black. A spec-named label is
+        seeded with the spec's instance-type mapping, so the preset table works even
+        when the labels arrive through an annotation instead of ``POST /labels``.
         """
         found: list[Label] = []
         used = self._used_label_colors(session, project_id)
@@ -704,6 +763,10 @@ class ProjectService:
             if label is None:
                 color = self.settings.default_label_color or pick_color(used)
                 label = Label(project_id=project_id, name=name, color=color)
+                spec = spec_for(name)
+                if spec is not None:
+                    label.default_instance_type = spec.default
+                    label.set_allowed_types(self._known_types(session, project_id, list(spec.allowed)))
                 session.add(label)
                 session.flush()
                 used.add(color)
@@ -721,7 +784,10 @@ class ProjectService:
     ) -> dict[str, Any]:
         """Apply the whole Labels page in one transaction: field edits + the order.
 
-        ``edits`` maps a label id to the submitted ``name``/``color``/``archived``;
+        ``edits`` maps a label id to the submitted ``name``/``color``/``archived`` and,
+        optionally, the instance-type mapping (``default_instance_type`` plus
+        ``allowed_instance_types`` together with ``set_allowed_types`` so the caller can
+        tell "not submitted" from the explicit ``None`` = unconfigured);
         ``order`` is the wanted id sequence and must list every label exactly once
         (``None``/empty keeps the current order, so a no-JS save still works). Only
         real changes are written; each one gets its own ``update_label`` audit row,
@@ -755,6 +821,16 @@ class ProjectService:
                 if archived != bool(label.archived):
                     label.archived = archived
                     detail["archived"] = archived
+                if "default_instance_type" in fields:
+                    default = str(fields.get("default_instance_type") or "").strip()
+                    if default != label.default_instance_type:
+                        label.default_instance_type = default
+                        detail["default_instance_type"] = default
+                if fields.get("set_allowed_types"):
+                    allowed = self._known_types(session, project_id, fields.get("allowed_instance_types"))
+                    if allowed != label.allowed_types:
+                        label.set_allowed_types(allowed)
+                        detail["allowed_instance_types"] = allowed
                 if detail:
                     changed += 1
                     audit.record(

@@ -8,6 +8,7 @@ stored on disk stays interchangeable with the desktop's own datasets.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 from sqlalchemy import (
@@ -132,8 +133,30 @@ class Label(Base):
     sort: Mapped[int] = mapped_column(Integer, default=0)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    #: instance type a new instance carrying this label starts with ("" = none)
+    default_instance_type: Mapped[str] = mapped_column(String(64), default="")
+    #: JSON list of the instance types this label may appear in.
+    #: ``NULL`` = unconfigured (the client falls back to the spec table), ``"[]"``
+    #: = explicitly unconstrained (any type is accepted).
+    allowed_instance_types: Mapped[str | None] = mapped_column(Text, default=None)
 
     project: Mapped[Project] = relationship(lazy="joined")
+
+    @property
+    def allowed_types(self) -> list[str] | None:
+        """``None`` (unconfigured) or the parsed list (``[]`` = unconstrained)."""
+        if self.allowed_instance_types is None:
+            return None
+        try:
+            value = json.loads(self.allowed_instance_types or "[]")
+        except ValueError:
+            return None
+        return [str(item) for item in value] if isinstance(value, list) else None
+
+    def set_allowed_types(self, allowed: list[str] | None) -> None:
+        self.allowed_instance_types = (
+            None if allowed is None else json.dumps(list(allowed), ensure_ascii=False)
+        )
 
 
 class Task(Base):

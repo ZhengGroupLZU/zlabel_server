@@ -44,6 +44,23 @@ INSTANCE_STATUS_PRESETS: tuple[str, ...] = (
 MAX_INSTANCE_NUMBER = 99999
 
 
+def status_vocabulary(session: OrmSession, project_id: int) -> list[str]:
+    """The project's instance-type vocabulary: the presets + everything already used.
+
+    The single source for "which types exist", shared with the label mapping
+    (``app/services/project_service.py``) so a mapping can never name a type the
+    dropdowns do not offer.
+    """
+    used = {
+        str(status)
+        for (status,) in session.execute(
+            select(Instance.status).where(Instance.project_id == project_id, Instance.status != "")
+        ).all()
+        if status
+    }
+    return list(INSTANCE_STATUS_PRESETS) + sorted(used - set(INSTANCE_STATUS_PRESETS))
+
+
 def parse_instance_annotations(document: dict[str, Any]) -> dict[int, dict[str, Any]]:
     """``{number: {"status": str, "results": [(result_id, label), ...]}}``.
 
@@ -221,14 +238,7 @@ class InstanceService:
         """The known statuses: the presets plus everything the project already uses."""
         with self.db.session_scope() as session:
             project_id = self._project_id(session, project)
-            used = {
-                str(status)
-                for (status,) in session.execute(
-                    select(Instance.status).where(Instance.project_id == project_id, Instance.status != "")
-                ).all()
-                if status
-            }
-        return list(INSTANCE_STATUS_PRESETS) + sorted(used - set(INSTANCE_STATUS_PRESETS))
+            return status_vocabulary(session, project_id)
 
     # endregion
 

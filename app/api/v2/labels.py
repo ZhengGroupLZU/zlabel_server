@@ -36,7 +36,13 @@ def create_label(
     services.projects.require_project_reviewer(auth, project)
     return LabelOut.of(
         services.projects.create_label(
-            project, payload.name, color=payload.color, sort=payload.sort, actor_id=auth.user_id
+            project,
+            payload.name,
+            color=payload.color,
+            sort=payload.sort,
+            actor_id=auth.user_id,
+            default_instance_type=payload.default_instance_type,
+            allowed_instance_types=payload.allowed_instance_types,
         )
     )
 
@@ -50,6 +56,7 @@ def update_label(
     services: Services = Depends(get_services),
 ) -> LabelOut:
     services.projects.require_project_reviewer(auth, project)
+    sent = payload.model_fields_set
     return LabelOut.of(
         services.projects.update_label(
             project,
@@ -59,6 +66,10 @@ def update_label(
             sort=payload.sort,
             archived=payload.archived,
             actor_id=auth.user_id,
+            default_instance_type=payload.default_instance_type,
+            allowed_instance_types=payload.allowed_instance_types,
+            # an omitted key keeps the mapping; an explicit null resets it to unconfigured
+            set_allowed_types="allowed_instance_types" in sent,
         )
     )
 

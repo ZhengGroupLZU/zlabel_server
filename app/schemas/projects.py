@@ -72,11 +72,22 @@ class LabelOut(BaseModel):
     color: str = "#000000"
     sort: int = 0
     archived: bool = False
+    #: instance type a new instance carrying this label starts with ("" = none)
+    default_instance_type: str = ""
+    #: instance types this label may appear in. ``None`` = unconfigured (the client
+    #: falls back to the spec table, ``docs/export_spec.md`` §1.1); ``[]`` = any type.
+    allowed_instance_types: list[str] | None = None
 
     @classmethod
     def of(cls, label) -> LabelOut:
         return cls(
-            id=label.id, name=label.name, color=label.color, sort=label.sort, archived=bool(label.archived)
+            id=label.id,
+            name=label.name,
+            color=label.color,
+            sort=label.sort,
+            archived=bool(label.archived),
+            default_instance_type=str(getattr(label, "default_instance_type", "") or ""),
+            allowed_instance_types=getattr(label, "allowed_types", None),
         )
 
 
@@ -86,6 +97,10 @@ class LabelCreate(BaseModel):
     color: str = ""
     #: ``None`` = append at the end (the displayed ordinal id is the position)
     sort: int | None = None
+    #: ``None`` = unconfigured: a spec-named label is seeded with the spec table,
+    #: any other label stays unconstrained
+    default_instance_type: str | None = None
+    allowed_instance_types: list[str] | None = None
 
 
 class LabelOrder(BaseModel):
@@ -141,6 +156,11 @@ class LabelPatch(BaseModel):
     color: str | None = None
     sort: int | None = None
     archived: bool | None = None
+    #: `""` clears the default
+    default_instance_type: str | None = None
+    #: ``None`` = reset to unconfigured (spec fallback); ``[]`` = any type.
+    #: Omitted entirely = leave unchanged — the router checks ``model_fields_set``.
+    allowed_instance_types: list[str] | None = None
 
 
 class MemberOut(BaseModel):

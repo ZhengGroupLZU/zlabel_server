@@ -97,3 +97,43 @@ def test_downgrade_base_is_clean(alembic_env):
     command.upgrade(config, "head")
     command.downgrade(config, "base")
     assert _tables(url) == {"alembic_version"}
+
+
+def test_label_instance_type_mapping_is_backfilled_by_name(alembic_env):
+    """Spec-named labels get the mapping; project-specific ones stay unconfigured."""
+    config, url = alembic_env
+    command.upgrade(config, "753db795f6b6")
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO projects (name, key, display_name, description, active, created_at, updated_at)"
+                " VALUES ('p', 'keyp', 'p', '', 1, '2026-01-01 00:00:00', '2026-01-01 00:00:00')"
+            )
+        )
+        for name in ("Root", "root", "Needle"):
+            conn.execute(
+                text(
+                    "INSERT INTO labels (project_id, name, color, sort, archived, created_at)"
+                    " VALUES (1, :name, '#111111', 0, 0, '2026-01-01 00:00:00')"
+                ),
+                {"name": name},
+            )
+    engine.dispose()
+
+    command.upgrade(config, "head")
+
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("SELECT name, default_instance_type, allowed_instance_types FROM labels ORDER BY id")
+        ).all()
+    engine.dispose()
+    by_name = {row.name: row for row in rows}
+    # name matching is case-insensitive, like the label uniqueness constraint
+    for name in ("Root", "root"):
+        assert by_name[name].default_instance_type == "normal_seedling"
+        assert '"normal_seedling"' in by_name[name].allowed_instance_types
+    # a project-specific label is left NULL = unconfigured
+    assert by_name["Needle"].default_instance_type == ""
+    assert by_name["Needle"].allowed_instance_types is None

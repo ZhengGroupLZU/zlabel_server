@@ -572,3 +572,38 @@ def test_lease_expiry_and_takeover(client, api, harness, client_api, tmp_path):
     # and a reviewer can always take over
     forced = api.claim(anno_id, force=True)
     assert forced.ok and forced.task["claimed_by"] == "rainy"
+
+
+def test_label_instance_type_mapping_roundtrip(api, harness):
+    """The mapping columns travel as sent, including the tri-state ``null``/``[]``.
+
+    The desktop's ``update_label`` drops ``None`` fields ("leave it alone"), so
+    "reset to the spec table" needs its own switch — this is the contract that keeps
+    the two sides agreeing.
+    """
+    _login(api)
+    seed(harness, PROJ, files=("a.png",))
+    api.scan(PROJ)
+
+    created = api.create_label(PROJ, "Root")
+    assert created["default_instance_type"] == "normal_seedling"
+    assert created["allowed_instance_types"] == ["normal_seedling", "abnormal_seedling", "moldy_seed"]
+    label_id = int(created["id"])
+
+    # [] = any type
+    api.update_label(PROJ, label_id, allowed_instance_types=[])
+    assert next(x for x in api.get_labels(PROJ) if x["id"] == label_id)["allowed_instance_types"] == []
+
+    # an omitted key keeps the mapping
+    api.update_label(PROJ, label_id, color="#123456")
+    kept = next(x for x in api.get_labels(PROJ) if x["id"] == label_id)
+    assert kept["allowed_instance_types"] == [] and kept["color"] == "#123456"
+
+    # reset_allowed_types sends the JSON null = unconfigured (client spec fallback)
+    api.update_label(PROJ, label_id, default_instance_type="", reset_allowed_types=True)
+    reset = next(x for x in api.get_labels(PROJ) if x["id"] == label_id)
+    assert reset["allowed_instance_types"] is None and reset["default_instance_type"] == ""
+
+    # a project-specific label stays unconfigured, a known name is seeded again
+    needle = api.create_label(PROJ, "Needle")
+    assert needle["allowed_instance_types"] is None
