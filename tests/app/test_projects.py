@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from app.db.models import Annotation, AnnotationVersion, AuditLog, Label, Project, ProjectMember, Task, User
+from app.db.models import Annotation, AnnotationVersion, AuditLog, Label, Project, ProjectMember, Task
 from app.services.project_service import ProjectService
 
 ROOT = "/zlabel_server/projects"
@@ -105,17 +105,27 @@ def test_progress_reflects_task_states(client, auth_headers, harness, db):
     assert progress["finished"] == 1
 
 
-def test_progress_by_user(client, auth_headers, harness, db):
+def test_progress_by_user_is_a_workload_breakdown(client, auth_headers, harness):
+    """``by_user`` counts history (versions/actions), not the current holder.
+
+    The detailed columns are covered by ``test_progress.py``; this is the smoke
+    test that the endpoint returns the flat workload row.
+    """
     seed(harness, "projA", files=("a.png",))
     headers = auth_headers(client)
     client.post("/api/v2/projects/scan", headers=headers)
-    with db.session_scope() as session:
-        task = session.scalar(select(Task))
-        task.claimer = session.scalar(select(User))
-        task.state = "approved"
+    anno_id = client.get("/api/v2/projects/projA/tasks", headers=headers).json()["items"][0]["anno_id"]
+    client.put(
+        f"/api/v2/projects/projA/annotations/{anno_id}",
+        json={"results": {"r1": {"labels": [{"name": "Seed"}]}}},
+        headers=headers,
+    )
 
     progress = client.get("/api/v2/projects/projA/progress", params={"by_user": True}, headers=headers).json()
-    assert progress["by_user"]["rainy"]["approved"] == 1
+    row = progress["by_user"]["rainy"]
+    assert row["created"] == 1 and row["total"] == 1
+    assert row["role"] == "admin"
+    assert set(row) == {"role", "claimed", "created", "modified", "submitted", "approved", "rejected", "total"}
 
 
 def test_unknown_project_is_404(client, auth_headers):

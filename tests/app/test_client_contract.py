@@ -607,3 +607,26 @@ def test_label_instance_type_mapping_roundtrip(api, harness):
     # a project-specific label stays unconfigured, a known name is seeded again
     needle = api.create_label(PROJ, "Needle")
     assert needle["allowed_instance_types"] is None
+
+
+def test_progress_by_user_returns_the_workload_rows(api, harness):
+    """The panel's Annotators tab reads these keys (and ``—`` when they are absent)."""
+    _login(api)
+    seed(harness, PROJ, files=("a.png",))
+    api.scan(PROJ)
+    anno_id = api.get_tasks(PROJ)["items"][0]["anno_id"]
+    assert api.claim(anno_id).status == 200
+
+    progress = api.get_progress(PROJ, by_user=True)
+    assert progress["total"] == 1
+    row = progress["by_user"]["rainy"]
+    assert row == {
+        "role": "admin",
+        "claimed": 1,
+        "created": 0,
+        "modified": 0,
+        "submitted": 0,
+        "approved": 0,
+        "rejected": 0,
+        "total": 1,
+    }

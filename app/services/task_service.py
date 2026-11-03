@@ -395,7 +395,13 @@ class TaskService:
                 user_id=auth.user_id,
                 target_type="task",
                 target_id=anno_id,
-                detail={"note": task.review_note, "annotator": self._name(session, task.claimed_by)},
+                detail={
+                    "note": task.review_note,
+                    # the annotator of record: the id survives a rename, the name is
+                    # kept for a human reading the audit log (and for older rows)
+                    "annotator": self._name(session, task.claimed_by),
+                    "annotator_id": task.claimed_by,
+                },
             )
             return self._rows(session, [task])[0]
 

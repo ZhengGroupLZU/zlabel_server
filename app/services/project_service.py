@@ -47,6 +47,7 @@ from app.services.grouping import parse_group
 from app.services.instance_service import status_vocabulary
 from app.services.label_palette import normalize_color, pick_color
 from app.services.label_types import filter_known_types, spec_for
+from app.services.progress_service import by_user_workload, empty_row, project_members
 
 logger = get_logger("zlabel.app.projects")
 
@@ -569,18 +570,20 @@ class ProjectService:
                 "finished": counts[STATE_APPROVED],  # convenience for the status bar
             }
             if by_user:
-                rows = session.execute(
-                    select(User.name, Task.state, func.count())
-                    .join(Task, Task.claimed_by == User.id)
-                    .join(Project, Project.id == Task.project_id)
-                    .where(Project.active.is_(True), Task.missing.is_(False))
-                    .group_by(User.name, Task.state)
-                ).all()
-                per_user: dict[str, dict[str, int]] = {}
-                for user_name, state, count in rows:
-                    per_user.setdefault(user_name, dict.fromkeys(STATES, 0))[state] = int(count)
-                result["by_user"] = per_user
+                project_id = None
+                if project:
+                    project_id = session.scalar(select(Project.id).where(Project.name == project))
+                result["by_user"] = self._by_user_workload(session, project_id)
             return result
+
+    @staticmethod
+    def _by_user_workload(session: OrmSession, project_id: int | None) -> dict[str, dict[str, Any]]:
+        """Per-user workload rows; project members without any history show zeros."""
+        per_user = by_user_workload(session, project_id)
+        if project_id is not None:
+            for name, role in project_members(session, project_id):
+                per_user.setdefault(name, empty_row(role))
+        return per_user
 
     # endregion
 

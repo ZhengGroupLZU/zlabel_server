@@ -7,6 +7,24 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+class UserWorkload(BaseModel):
+    """One annotator's history in a project (the status bar's Annotators tab).
+
+    Task-level counts (``claimed``/``created``/``modified``/``total``) sit next to
+    action counts (``submitted``/``approved``/``rejected``): they are not addable,
+    which is why the client's summary row leaves ``total`` empty.
+    """
+
+    role: str = ""
+    claimed: int = 0
+    created: int = 0
+    modified: int = 0
+    submitted: int = 0
+    approved: int = 0
+    rejected: int = 0
+    total: int = 0
+
+
 class ProgressOut(BaseModel):
     total: int = 0
     draft: int = 0
@@ -14,7 +32,7 @@ class ProgressOut(BaseModel):
     approved: int = 0
     rejected: int = 0
     finished: int = 0  # == approved (status-bar convenience)
-    by_user: dict[str, dict[str, int]] | None = None
+    by_user: dict[str, UserWorkload] | None = None
 
     @classmethod
     def of(cls, data: dict) -> ProgressOut:
