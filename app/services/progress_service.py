@@ -3,24 +3,29 @@
 The panel used to show the *current* state distribution of whatever each user
 holds right now, which answers "who is working" but not "who did how much".
 This module aggregates the history instead - ``audit_log`` for the actions
-(claim / submit / review) and ``annotation_versions`` for the authored versions:
+(claim / submit / review) and ``annotation_versions`` for the authored versions.
 
-=============  ============================================================
-``role``       ``users.role`` (annotator / reviewer / admin)
-``claimed``    distinct tasks the user ever claimed (release + re-claim = 1)
-``created``    distinct tasks whose first version the user authored
-``modified``   distinct tasks the user authored a later version of
-``submitted``  ``submit`` actions; a rejected task resubmitted counts twice
-``approved``   ``review_approve`` events attributed to the task's annotator
-``rejected``   ``review_reject`` events, same attribution
-``total``      distinct tasks in the union of the task-level columns above
-=============  ============================================================
+Almost every column is a **task count**, so a row reads like a small workflow
+snapshot and the columns add up (except ``total``, whose per-user unions overlap):
 
-The task-level columns are task counts while ``submitted``/``approved``/
-``rejected`` are event counts, so a row does not add up - that is why the client
-shows ``—`` in the Total column of its summary row. A review is attributed to the
-annotator of record (``annotator_id``, then the historic ``annotator`` name, then
-the task's current holder) and never to the reviewer.
+==============  ===========================================================
+``role``        ``users.role`` (annotator / reviewer / admin)
+``claimed``     distinct tasks the user ever claimed (release + re-claim = 1)
+``created``     distinct tasks whose first version the user authored
+``modified``    distinct tasks the user authored a later version of
+``submitted``   distinct tasks the user handed in (submitting twice = 1 task)
+``approved``    of those, the ones currently approved
+``rejected``    of those, the ones currently rejected
+``open``        tasks the user still holds in ``draft`` (in hand, not handed in)
+``total``       distinct tasks in the union of the four task-level columns above
+``submits``     submit *actions* (a rejected and resubmitted task counts twice)
+``rejections``  rejection *events* attributed to the annotator of record
+==============  ===========================================================
+
+The last two are deliberately narrow "times" columns: they keep the process
+signal without making the unit of the table ambiguous. A review is attributed to
+the annotator of record (``annotator_id``, then the historic ``annotator`` name,
+then the task's current holder) and never to the reviewer.
 """
 
 from __future__ import annotations
@@ -32,23 +37,38 @@ from typing import Any
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session as OrmSession
 
-from app.db.models import AnnotationVersion, AuditLog, Project, ProjectMember, Task, User
+from app.db.models import (
+    STATE_APPROVED,
+    STATE_DRAFT,
+    STATE_REJECTED,
+    AnnotationVersion,
+    AuditLog,
+    Project,
+    ProjectMember,
+    Task,
+    User,
+)
 
 #: audit actions this module reads
 CLAIM_ACTION = "claim"
 SUBMIT_ACTION = "submit"
-REVIEW_ACTIONS = ("review_approve", "review_reject")
+REVIEW_REJECT = "review_reject"
 
 #: numeric columns of one row (everything except ``role``)
-WORKLOAD_FIELDS: tuple[str, ...] = (
+#: task-count columns (a row of these can be read and added up)
+TASK_FIELDS: tuple[str, ...] = (
     "claimed",
     "created",
     "modified",
     "submitted",
     "approved",
     "rejected",
+    "open",
     "total",
 )
+#: event-count columns ("how many times": a task can count more than once)
+EVENT_FIELDS: tuple[str, ...] = ("submits", "rejections")
+WORKLOAD_FIELDS: tuple[str, ...] = TASK_FIELDS + EVENT_FIELDS
 
 
 def empty_row(role: str = "") -> dict[str, Any]:
@@ -71,12 +91,17 @@ def by_user_workload(session: OrmSession, project_id: int | None = None) -> dict
         entry = rows.setdefault(name, empty_row())
         entry["created"] = created
         entry["modified"] = modified
-    for name, count in _submit_actions(session, project_id).items():
+    for name, count in _submitted_tasks(session, project_id).items():
         rows.setdefault(name, empty_row())["submitted"] = count
-    for name, approved, rejected in _review_events(session, project_id):
-        entry = rows.setdefault(name, empty_row())
-        entry["approved"] = approved
-        entry["rejected"] = rejected
+    for state in (STATE_APPROVED, STATE_REJECTED):
+        for name, count in _tasks_in_state(session, project_id, state).items():
+            rows.setdefault(name, empty_row())[state] = count
+    for name, count in _open_tasks(session, project_id).items():
+        rows.setdefault(name, empty_row())["open"] = count
+    for name, count in _submit_actions(session, project_id).items():
+        rows.setdefault(name, empty_row())["submits"] = count
+    for name, count in _rejection_events(session, project_id).items():
+        rows.setdefault(name, empty_row())["rejections"] = count
 
     touched = _touched_tasks(session, project_id)
     for name in rows:
@@ -139,8 +164,21 @@ def _version_authors(session: OrmSession, project_id: int | None) -> list[tuple[
     ]
 
 
+def _submitted_tasks(session: OrmSession, project_id: int | None) -> dict[str, int]:
+    """Distinct tasks each user handed in (submitting the same task twice = 1)."""
+    query = (
+        select(User.name, func.count(func.distinct(AuditLog.target_id)))
+        .select_from(AuditLog)
+        .join(User, User.id == AuditLog.user_id)
+        .join(Task, Task.anno_id == AuditLog.target_id)
+        .join(Project, Project.id == Task.project_id)
+        .where(AuditLog.action == SUBMIT_ACTION, AuditLog.target_type == "task", *_task_scope(project_id))
+    )
+    return {str(name): int(count) for name, count in session.execute(query.group_by(User.name)).all()}
+
+
 def _submit_actions(session: OrmSession, project_id: int | None) -> dict[str, int]:
-    """Every ``submit`` action counts (a rejected task resubmitted counts twice)."""
+    """Every ``submit`` action counts (the ``submits`` column)."""
     query = (
         select(User.name, func.count())
         .select_from(AuditLog)
@@ -152,32 +190,73 @@ def _submit_actions(session: OrmSession, project_id: int | None) -> dict[str, in
     return {str(name): int(count) for name, count in session.execute(query.group_by(User.name)).all()}
 
 
-def _review_events(session: OrmSession, project_id: int | None) -> list[tuple[str, int, int]]:
-    """``(annotator name, approved, rejected)`` - the annotator's record, not the reviewer's."""
+def _tasks_in_state(session: OrmSession, project_id: int | None, state: str) -> dict[str, int]:
+    """Tasks currently in ``state``, attributed to whoever submitted them last.
+
+    This is the snapshot half of the table, so it lines up with the States tab:
+    ``submitted ~= approved + rejected + open + still under review``. The submitter
+    comes from the last ``submit`` audit row; a task saved by an older build (no
+    audit trail) falls back to its current holder.
+    """
+    last_submit = (
+        select(func.max(AuditLog.id))
+        .where(
+            AuditLog.target_id == Task.anno_id,
+            AuditLog.action == SUBMIT_ACTION,
+            AuditLog.target_type == "task",
+        )
+        .correlate(Task)
+        .scalar_subquery()
+    )
+    annotator_id = func.coalesce(AuditLog.user_id, Task.claimed_by)
     query = (
-        select(AuditLog.action, AuditLog.detail_json, Task.claimed_by)
+        select(User.name, func.count(func.distinct(Task.anno_id)))
+        .select_from(Task)
+        .join(AuditLog, AuditLog.id == last_submit, isouter=True)
+        .join(User, User.id == annotator_id)
+        .join(Project, Project.id == Task.project_id)
+        .where(Task.state == state, *_task_scope(project_id))
+    )
+    return {str(name): int(count) for name, count in session.execute(query.group_by(User.name)).all()}
+
+
+def _open_tasks(session: OrmSession, project_id: int | None) -> dict[str, int]:
+    """Tasks currently in hand and not handed in (``claimed_by`` + ``draft``)."""
+    query = (
+        select(User.name, func.count(func.distinct(Task.anno_id)))
+        .select_from(Task)
+        .join(User, User.id == Task.claimed_by)
+        .join(Project, Project.id == Task.project_id)
+        .where(Task.state == STATE_DRAFT, *_task_scope(project_id))
+    )
+    return {str(name): int(count) for name, count in session.execute(query.group_by(User.name)).all()}
+
+
+def _rejection_events(session: OrmSession, project_id: int | None) -> dict[str, int]:
+    """Rejection *events* attributed to the annotator of record (the ``rejections`` column)."""
+    query = (
+        select(AuditLog.detail_json, Task.claimed_by)
         .select_from(AuditLog)
         .join(Task, Task.anno_id == AuditLog.target_id)
         .join(Project, Project.id == Task.project_id)
-        .where(AuditLog.action.in_(REVIEW_ACTIONS), *_task_scope(project_id))
+        .where(AuditLog.action == REVIEW_REJECT, *_task_scope(project_id))
     )
     rows = session.execute(query).all()
     if not rows:
-        return []
+        return {}
     names = {
         int(user_id): str(name)
         for user_id, name in session.execute(select(User.id, User.name)).all()
         if user_id is not None
     }
-    totals: dict[str, list[int]] = defaultdict(lambda: [0, 0])
-    for action, detail_json, holder_id in rows:
+    totals: dict[str, int] = defaultdict(int)
+    for detail_json, holder_id in rows:
         detail = _detail(detail_json)
         annotator = names.get(_as_int(detail.get("annotator_id")), "")
         annotator = annotator or str(detail.get("annotator") or "") or names.get(holder_id, "")
-        if not annotator:
-            continue  # anonymous row (user deleted): nothing to attribute it to
-        totals[annotator][0 if action == "review_approve" else 1] += 1
-    return [(name, values[0], values[1]) for name, values in totals.items()]
+        if annotator:
+            totals[annotator] += 1
+    return dict(totals)
 
 
 def _touched_tasks(session: OrmSession, project_id: int | None) -> dict[str, set[str]]:

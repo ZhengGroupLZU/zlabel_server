@@ -8,21 +8,27 @@ from pydantic import BaseModel, Field
 
 
 class UserWorkload(BaseModel):
-    """One annotator's history in a project (the status bar's Annotators tab).
+    """One annotator's workload in a project (the status bar's Annotators tab).
 
-    Task-level counts (``claimed``/``created``/``modified``/``total``) sit next to
-    action counts (``submitted``/``approved``/``rejected``): they are not addable,
-    which is why the client's summary row leaves ``total`` empty.
+    Every column but ``submits``/``rejections`` is a **task count** (so a row can be
+    read and added up), the last two are **event counts** ("how many times").
+    ``total`` is a union of the task-level columns, which is why its summary cell
+    is left empty instead of being summed across users.
     """
 
     role: str = ""
+    # --- task counts
     claimed: int = 0
     created: int = 0
     modified: int = 0
     submitted: int = 0
     approved: int = 0
     rejected: int = 0
+    open: int = 0
     total: int = 0
+    # --- event counts
+    submits: int = 0
+    rejections: int = 0
 
 
 class ProgressOut(BaseModel):

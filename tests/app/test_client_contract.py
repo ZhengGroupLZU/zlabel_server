@@ -628,5 +628,8 @@ def test_progress_by_user_returns_the_workload_rows(api, harness):
         "submitted": 0,
         "approved": 0,
         "rejected": 0,
+        "open": 1,  # claimed and still draft
         "total": 1,
+        "submits": 0,
+        "rejections": 0,
     }

@@ -12,7 +12,7 @@ import json
 import pytest
 from sqlalchemy import select
 
-from app.db.models import AuditLog, Task, User
+from app.db.models import AuditLog, User
 from tests.app.test_projects import seed
 
 PROJ = "projA"
@@ -118,15 +118,19 @@ def test_every_column_counts_its_own_history(client, workspace):
     _review(client, rev, b, "approve")
 
     by_user = _workload(client, workspace["admin"])
+    # every column but the last two is a task count: one task, counted once
     assert by_user["bob"] == {
         "role": "annotator",
         "claimed": 1,
         "created": 1,
         "modified": 1,
-        "submitted": 2,  # rejected then resubmitted
-        "approved": 1,
-        "rejected": 1,
-        "total": 1,  # one task, touched four ways
+        "submitted": 1,  # submitted twice, one task
+        "approved": 1,  # it ended approved
+        "rejected": 0,  # ... so it is not rejected any more
+        "open": 0,
+        "total": 1,
+        "submits": 2,  # the times columns keep the process detail
+        "rejections": 1,
     }
     assert by_user["carol"] == {
         "role": "annotator",
@@ -136,21 +140,20 @@ def test_every_column_counts_its_own_history(client, workspace):
         "submitted": 1,
         "approved": 1,
         "rejected": 0,
+        "open": 0,
         "total": 1,
+        "submits": 1,
+        "rejections": 0,
     }
     # the reviewer did the reviewing; the columns are the annotator's output
-    assert by_user["rev"] == {
-        "role": "reviewer",
-        "claimed": 0,
-        "created": 0,
-        "modified": 0,
-        "submitted": 0,
-        "approved": 0,
-        "rejected": 0,
-        "total": 0,
-    }
+    assert by_user["rev"] == dict(
+        by_user["rev"], role="reviewer", claimed=0, created=0, modified=0, submitted=0, total=0
+    )
+    assert by_user["rev"]["approved"] == 0 and by_user["rev"]["rejections"] == 0
     # an idle member still shows up, with zeros and the project role
     assert by_user["dave"]["total"] == 0 and by_user["dave"]["role"] == "annotator"
+    # the task-level columns line up: submitted = approved + rejected + open + under review
+    assert by_user["bob"]["submitted"] == by_user["bob"]["approved"] + by_user["bob"]["open"]
 
 
 def test_total_is_the_union_of_touched_tasks(client, workspace):
@@ -167,6 +170,9 @@ def test_total_is_the_union_of_touched_tasks(client, workspace):
     assert row["created"] == 3
     assert row["total"] == 3  # the union, not the sum
     assert row["submitted"] == 0
+    # saving renews the claim, so all three are in hand and still draft
+    assert row["open"] == 3
+    assert row["submits"] == 0 and row["rejections"] == 0
 
 
 def test_review_attribution_survives_a_rename(client, workspace, db):
@@ -185,27 +191,25 @@ def test_review_attribution_survives_a_rename(client, workspace, db):
         session.flush()
 
     by_user = _workload(client, workspace["admin"])
-    assert by_user["bobby"]["approved"] == 1
-    assert by_user["bobby"]["created"] == 1
+    assert by_user["bobby"]["approved"] == 1  # attributed through annotator_id
+    assert by_user["bobby"]["created"] == 1  # versions join on user_id anyway
     assert "bob" not in by_user
 
 
 def test_old_review_rows_without_an_id_fall_back_to_the_name(client, workspace, db):
-    """Rows written before ``annotator_id`` existed still land on the right person."""
+    """A rejection row written before ``annotator_id`` existed still lands on bob."""
     bob = _task(client, workspace["bob"], "a.png")
     with db.session_scope() as session:
-        task = session.scalar(select(Task).where(Task.anno_id == bob))
         session.add(
             AuditLog(
-                action="review_approve",
+                action="review_reject",
                 target_type="task",
                 target_id=bob,
                 detail_json=json.dumps({"note": "", "annotator": "bob"}),
             )
         )
-        task.state = "approved"
 
-    assert _workload(client, workspace["admin"])["bob"]["approved"] == 1
+    assert _workload(client, workspace["admin"])["bob"]["rejections"] == 1
 
 
 def test_the_breakdown_is_project_scoped(client, workspace, harness):

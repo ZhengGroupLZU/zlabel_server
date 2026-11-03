@@ -125,7 +125,19 @@ def test_progress_by_user_is_a_workload_breakdown(client, auth_headers, harness)
     row = progress["by_user"]["rainy"]
     assert row["created"] == 1 and row["total"] == 1
     assert row["role"] == "admin"
-    assert set(row) == {"role", "claimed", "created", "modified", "submitted", "approved", "rejected", "total"}
+    assert set(row) == {
+        "role",
+        "claimed",
+        "created",
+        "modified",
+        "submitted",
+        "approved",
+        "rejected",
+        "open",
+        "total",
+        "submits",
+        "rejections",
+    }
 
 
 def test_unknown_project_is_404(client, auth_headers):
