@@ -578,11 +578,18 @@ class ProjectService:
 
     @staticmethod
     def _by_user_workload(session: OrmSession, project_id: int | None) -> dict[str, dict[str, Any]]:
-        """Per-user workload rows; project members without any history show zeros."""
+        """Per-user workload rows; project members without any history show zeros.
+
+        A member's *project* role wins over the global one: a global annotator who
+        reviews this project is a reviewer here, and the panel must say so - the
+        workload rows themselves only know the global role.
+        """
         per_user = by_user_workload(session, project_id)
         if project_id is not None:
             for name, role in project_members(session, project_id):
-                per_user.setdefault(name, empty_row(role))
+                entry = per_user.setdefault(name, empty_row(role))
+                if role:
+                    entry["role"] = role
         return per_user
 
     # endregion

@@ -25,6 +25,7 @@ def workspace(client, auth_headers, harness, services, db):
     harness.users["bob"] = "bobsecret"
     harness.users["carol"] = "carolsecret"
     harness.users["dave"] = "davesecret"
+    harness.users["pat"] = "patsecret"
     harness.users["rev"] = "revsecret"
     admin = auth_headers(client, "rainy")
     # the session token of a login carries the role, so promote and log in again
@@ -46,6 +47,12 @@ def workspace(client, auth_headers, harness, services, db):
         headers=admin,
     )
     assert idle.status_code == 201, idle.text
+    # globally an annotator, reviewer *in this project*: the panel must say reviewer
+    client.post(
+        f"/api/v2/projects/{PROJ}/members",
+        json={"user_id": users["pat"].id, "role": "reviewer"},
+        headers=admin,
+    )
     return {
         "admin": admin,
         "bob": auth_headers(client, "bob", "bobsecret"),
@@ -146,12 +153,23 @@ def test_every_column_counts_its_own_history(client, workspace):
         "rejections": 0,
     }
     # the reviewer did the reviewing; the columns are the annotator's output
-    assert by_user["rev"] == dict(
-        by_user["rev"], role="reviewer", claimed=0, created=0, modified=0, submitted=0, total=0
-    )
-    assert by_user["rev"]["approved"] == 0 and by_user["rev"]["rejections"] == 0
+    assert by_user["rev"] == {
+        "role": "reviewer",
+        "claimed": 0,
+        "created": 0,
+        "modified": 0,
+        "submitted": 0,
+        "approved": 0,
+        "rejected": 0,
+        "open": 0,
+        "total": 0,
+        "submits": 0,
+        "rejections": 0,
+    }
     # an idle member still shows up, with zeros and the project role
     assert by_user["dave"]["total"] == 0 and by_user["dave"]["role"] == "annotator"
+    # ... and the project role beats the global one
+    assert by_user["pat"]["total"] == 0 and by_user["pat"]["role"] == "reviewer"
     # the task-level columns line up: submitted = approved + rejected + open + under review
     assert by_user["bob"]["submitted"] == by_user["bob"]["approved"] + by_user["bob"]["open"]
 
